@@ -382,8 +382,14 @@ const SUPPORTED_PSPS = {
                 log(`[Moneris Callback] Error: ${JSON.stringify(err)}`, 'error');
             });
 
-            monerisCheckoutInstance.setCallback('payment_complete', async (callbackData) => {
-                log(`[Moneris Callback] payment_complete: ${callbackData}`, 'success');
+            let receiptHandled = false;
+            const handleMonerisSuccess = async (eventName, callbackData) => {
+                log(`[Moneris Callback] ${eventName}: ${typeof callbackData === 'string' ? callbackData : JSON.stringify(callbackData)}`, 'success');
+                if (receiptHandled) {
+                    return;
+                }
+                receiptHandled = true;
+
                 let parsed = {};
                 try {
                     parsed = typeof callbackData === 'string' ? JSON.parse(callbackData) : callbackData;
@@ -394,7 +400,7 @@ const SUPPORTED_PSPS = {
                 // Verify Receipt server-to-server
                 log('[Proxy Moneris] Verifying transaction receipt via /api/moneris-receipt...', 'system');
                 try {
-                    const ticketToVerify = parsed.ticket || sessionData.ticket;
+                    const ticketToVerify = (parsed.response && parsed.response.ticket) || parsed.ticket || sessionData.ticket;
                     const receiptRes = await fetch('/api/moneris-receipt', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -402,25 +408,72 @@ const SUPPORTED_PSPS = {
                     });
                     const receiptData = await receiptRes.json();
                     log(`[Proxy Moneris] Receipt Status: ${JSON.stringify(receiptData.response ? receiptData.response.receipt : receiptData)}`, 'success');
+
+                    const receipt = receiptData?.response?.receipt?.cc;
+                    const tokenize = receipt?.tokenize;
+                    const hasToken = tokenize?.success === 'true' && Boolean(tokenize?.datakey);
+                    const amount = receipt?.amount;
+                    const isZeroDollar = amount === '0.00' || amount === '0';
+
+                    let title = 'Moneris Transaction Complete!';
+                    let subtitle = 'The transaction was processed successfully by Moneris.';
+
+                    if (isZeroDollar && hasToken) {
+                        title = 'Card Successfully Verified & Saved!';
+                        subtitle = 'Zero-dollar authorization approved and card securely tokenized.';
+                    } else if (hasToken) {
+                        title = 'Payment & Card Registration Complete!';
+                        subtitle = amount ? `Payment of $${amount} CAD processed and card tokenized.` : 'Payment processed and card tokenized.';
+                    } else if (amount && !isZeroDollar) {
+                        title = 'Moneris Payment Complete!';
+                        subtitle = `Payment of $${amount} CAD was successfully approved.`;
+                    }
+
+                    const cardMasked = tokenize?.first4last4 || receipt?.first6last4 || null;
+
+                    let detailsHtml = `<strong>Order No:</strong> ${sessionData.order_no}<br><strong>Ticket:</strong> ${sessionData.ticket}`;
+                    if (amount !== undefined && amount !== null) {
+                        detailsHtml += `<br><strong>Amount:</strong> $${amount} CAD`;
+                    }
+                    if (receipt?.approval_code) {
+                        detailsHtml += `<br><strong>Approval Code:</strong> ${receipt.approval_code}`;
+                    }
+                    if (receipt?.transaction_no) {
+                        detailsHtml += `<br><strong>Txn No:</strong> ${receipt.transaction_no}`;
+                    }
+                    if (cardMasked) {
+                        detailsHtml += `<br><strong>Card:</strong> ${cardMasked}`;
+                    }
+                    if (hasToken) {
+                        detailsHtml += `<br><strong>Vault Token (data_key):</strong> <span style="color: #2b6cb0; font-weight: 600;">${tokenize.datakey}</span>`;
+                    }
+
+                    cleanupExistingSession();
+                    if (sdkContainer) {
+                        sdkContainer.classList.remove('hidden');
+                        sdkContainer.innerHTML = `
+                            <div class="card-success-message" style="text-align: center; padding: 40px 20px; animation: fadeIn 0.4s ease-out;">
+                                <div style="font-size: 3rem; margin-bottom: 16px;">✅</div>
+                                <h3 style="color: var(--success); font-weight: 700; margin-bottom: 8px;">${title}</h3>
+                                <p style="font-size: 0.85rem; color: var(--text-main); margin-bottom: 16px;">${subtitle}</p>
+                                <div style="background-color: var(--success-light); color: var(--success); border: 1px solid rgba(56, 161, 105, 0.2); font-family: var(--font-mono); font-size: 0.75rem; padding: 12px; border-radius: var(--radius-md); word-break: break-all; text-align: left; line-height: 1.6;">
+                                    ${detailsHtml}
+                                </div>
+                            </div>
+                        `;
+                    }
                 } catch (rErr) {
                     log(`[Proxy Moneris Error] Receipt verification error: ${rErr.message}`, 'error');
                 }
+            };
 
-                cleanupExistingSession();
-                if (sdkContainer) {
-                    sdkContainer.classList.remove('hidden');
-                    sdkContainer.innerHTML = `
-                        <div class="card-success-message" style="text-align: center; padding: 40px 20px; animation: fadeIn 0.4s ease-out;">
-                            <div style="font-size: 3rem; margin-bottom: 16px;">✅</div>
-                            <h3 style="color: var(--success); font-weight: 700; margin-bottom: 8px;">Moneris Payment Complete!</h3>
-                            <p style="font-size: 0.85rem; color: var(--text-main); margin-bottom: 16px;">The transaction was processed by Moneris.</p>
-                            <div style="background-color: var(--success-light); color: var(--success); border: 1px solid rgba(56, 161, 105, 0.2); font-family: var(--font-mono); font-size: 0.75rem; padding: 12px; border-radius: var(--radius-md); word-break: break-all; text-align: left;">
-                                <strong>Order No:</strong> ${sessionData.order_no}<br>
-                                <strong>Ticket:</strong> ${sessionData.ticket}
-                            </div>
-                        </div>
-                    `;
-                }
+            monerisCheckoutInstance.setCallback('payment_receipt', (data) => handleMonerisSuccess('payment_receipt', data));
+            monerisCheckoutInstance.setCallback('payment_complete', (data) => handleMonerisSuccess('payment_complete', data));
+            monerisCheckoutInstance.setCallback('payment_submitted', () => {
+                log('[Moneris Callback] Payment submitted by user.', 'system');
+            });
+            monerisCheckoutInstance.setCallback('page_closed', () => {
+                log('[Moneris Callback] Checkout page closed.', 'system');
             });
 
             log('[System] Launching Moneris startCheckout()...', 'system');
@@ -569,7 +622,8 @@ function cleanupExistingSession() {
 async function createCheckoutSession() {
     const psp = getSelectedPsp();
     const customerRef = customerRefInput.value.trim() || '1';
-    const amount = parseInt(orderAmountInput.value.trim(), 10) || 811;
+    const rawAmount = parseInt(orderAmountInput.value.trim(), 10);
+    const amount = Number.isInteger(rawAmount) ? rawAmount : 811;
     const currency = orderCurrencyInput.value.trim() || psp.defaultCurrency;
     const mitType = mitTypeSelect.value;
     const checkoutMethod = checkoutMethodSelect ? checkoutMethodSelect.value : psp.defaultMethod;
