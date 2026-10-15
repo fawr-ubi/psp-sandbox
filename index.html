@@ -203,6 +203,53 @@
                     </details>
                 </div>
 
+                <div id="moneris-vault-settings-container" style="display: none;">
+                    <div class="form-group">
+                        <label for="monerisSavedTokensSelect">Saved Moneris Vault Tokens</label>
+                        <select id="monerisSavedTokensSelect">
+                            <option value="">-- No saved tokens found --</option>
+                        </select>
+                        <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 4px;">
+                            Tokens are saved automatically upon successful payment with Moneris Checkout.
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="monerisVaultDataKey">Data Key (Token)</label>
+                        <input type="text" id="monerisVaultDataKey" placeholder="e.g. ot-18239103... or paste a data_key">
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="monerisVaultActionType">Transaction Type</label>
+                            <select id="monerisVaultActionType">
+                                <option value="purchase" selected>Purchase (res_purchase_cc)</option>
+                                <option value="card_verification">Card Verification $0.00 (res_cardverification_cc)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="monerisVaultCryptType">Crypt Type</label>
+                            <select id="monerisVaultCryptType">
+                                <option value="7" selected>7 - SSL E-Commerce (Default)</option>
+                                <option value="1">1 - Recurring Billing</option>
+                                <option value="2">2 - Installment Payment</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="monerisVaultExpDate">Card Expiry (MMYY, optional)</label>
+                            <input type="text" id="monerisVaultExpDate" placeholder="e.g. 1228" maxlength="4">
+                        </div>
+                        <div class="form-group" style="display: flex; align-items: flex-end;">
+                            <button type="button" id="btn-clear-saved-tokens" class="btn btn-secondary" style="width: 100%; font-size: 0.8rem; padding: 8px;">
+                                🗑️ Clear Saved Tokens
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="form-actions">
                     <button type="submit" id="btn-submit" class="btn btn-primary">Generate Token & Register Card</button>
                     <button type="button" id="btn-unmount" class="btn btn-secondary" disabled>Unmount SDK Instance</button>
@@ -233,6 +280,9 @@
 
                     <!-- Target element where Moneris will mount -->
                     <div id="moneris-checkout-ui" class="hidden" style="min-height: 400px; width: 100%;"></div>
+
+                    <!-- Target element where Moneris Vault will mount -->
+                    <div id="moneris-vault-ui" class="hidden" style="width: 100%;"></div>
                 </div>
             </div>
 

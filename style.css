@@ -513,3 +513,142 @@ input[type="color"]::-webkit-color-swatch {
     font-size: 0.8rem;
     color: var(--text-muted);
 }
+
+/* Moneris Vault Payment UI Styling */
+#moneris-vault-ui {
+    width: 100%;
+    animation: fadeIn 0.3s ease-out;
+}
+
+.vault-container {
+    background: #ffffff;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 24px;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.vault-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 12px;
+}
+
+.vault-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.vault-security-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.7rem;
+    color: #2b6cb0;
+    background-color: #ebf8ff;
+    border: 1px solid #bee3f8;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-weight: 500;
+}
+
+.vault-submit-btn {
+    width: 100%;
+    padding: 12px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    border-radius: var(--radius-md);
+    background-color: var(--primary);
+    color: #ffffff;
+    border: none;
+    cursor: pointer;
+    transition: background-color 0.2s ease, transform 0.1s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.vault-submit-btn:hover:not(:disabled) {
+    background-color: var(--primary-dark);
+}
+
+.vault-submit-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.vault-token-card {
+    background: linear-gradient(135deg, #1a365d 0%, #2b6cb0 100%);
+    color: #ffffff;
+    border-radius: 12px;
+    padding: 20px;
+    position: relative;
+    box-shadow: 0 4px 12px rgba(43, 108, 176, 0.25);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 140px;
+}
+
+.vault-token-chip {
+    font-size: 1.5rem;
+    line-height: 1;
+}
+
+.vault-token-number {
+    font-family: var(--font-mono);
+    font-size: 1.15rem;
+    letter-spacing: 2px;
+    font-weight: 600;
+    margin: 12px 0 6px 0;
+    word-break: break-all;
+}
+
+.vault-token-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.vault-details-list {
+    background-color: #f7fafc;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+    font-size: 0.8rem;
+    line-height: 1.8;
+    color: var(--text-main);
+}
+
+.btn-use-saved-token {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    margin-top: 14px;
+    background-color: var(--primary);
+    color: #ffffff;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.btn-use-saved-token:hover {
+    background-color: var(--primary-dark);
+}
+
+

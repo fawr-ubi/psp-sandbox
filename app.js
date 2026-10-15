@@ -20,7 +20,16 @@ const pspProviderSelect = document.getElementById('pspProvider');
 const checkoutMethodSelect = document.getElementById('checkoutMethod');
 const autoTokenFields = document.getElementById('auto-token-fields');
 const littlepaySettingsContainer = document.getElementById('littlepay-settings-container');
+const monerisVaultSettingsContainer = document.getElementById('moneris-vault-settings-container');
 const mitTypeGroup = document.getElementById('mit-type-group');
+
+// Moneris Vault (Saved Data Key) Settings Inputs
+const monerisSavedTokensSelect = document.getElementById('monerisSavedTokensSelect');
+const monerisVaultDataKeyInput = document.getElementById('monerisVaultDataKey');
+const monerisVaultActionTypeSelect = document.getElementById('monerisVaultActionType');
+const monerisVaultCryptTypeSelect = document.getElementById('monerisVaultCryptType');
+const monerisVaultExpDateInput = document.getElementById('monerisVaultExpDate');
+const btnClearSavedTokens = document.getElementById('btn-clear-saved-tokens');
 
 // Mode Inputs
 const customerRefInput = document.getElementById('customerRef');
@@ -44,6 +53,7 @@ const logsContainer = document.getElementById('logs-container');
 const sdkPlaceholder = document.getElementById('sdk-placeholder');
 const sdkContainer = document.getElementById('littlepay-dropin-ui');
 const monerisContainer = document.getElementById('moneris-checkout-ui');
+const monerisVaultContainer = document.getElementById('moneris-vault-ui');
 
 // Settings
 const localeSelect = document.getElementById('locale');
@@ -69,6 +79,101 @@ function log(message, type = 'system') {
     if (logsContainer) {
         logsContainer.appendChild(entry);
         logsContainer.scrollTop = logsContainer.scrollHeight;
+    }
+}
+
+// =============================================================================
+// MONERIS VAULT DATA KEY STORAGE HELPERS
+// =============================================================================
+const STORAGE_KEY_MONERIS_TOKENS = 'moneris_saved_data_keys';
+
+function getSavedMonerisDataKeys() {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY_MONERIS_TOKENS);
+        return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function saveMonerisDataKey(tokenData) {
+    if (!tokenData || !tokenData.dataKey) return;
+    try {
+        const keys = getSavedMonerisDataKeys();
+        const existingIdx = keys.findIndex(k => k.dataKey === tokenData.dataKey);
+        const item = {
+            dataKey: tokenData.dataKey,
+            cardMasked: tokenData.cardMasked || '•••• •••• •••• ••••',
+            source: tokenData.source || 'Moneris Checkout',
+            date: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString(),
+            ...tokenData
+        };
+        if (existingIdx >= 0) {
+            keys[existingIdx] = item;
+        } else {
+            keys.unshift(item);
+        }
+        localStorage.setItem(STORAGE_KEY_MONERIS_TOKENS, JSON.stringify(keys));
+        populateSavedDataKeysDropdown();
+        log(`[Moneris Vault] Token '${tokenData.dataKey}' (${item.cardMasked}) saved to local storage for future Vault payments.`, 'success');
+    } catch (e) {
+        console.warn('Failed to save Moneris token to localStorage:', e);
+    }
+}
+
+function populateSavedDataKeysDropdown() {
+    if (!monerisSavedTokensSelect) return;
+    const keys = getSavedMonerisDataKeys();
+    monerisSavedTokensSelect.innerHTML = '';
+
+    if (keys.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = '-- No saved tokens available --';
+        monerisSavedTokensSelect.appendChild(opt);
+        if (monerisVaultDataKeyInput) monerisVaultDataKeyInput.value = '';
+        return;
+    }
+
+    keys.forEach((k, idx) => {
+        const opt = document.createElement('option');
+        opt.value = k.dataKey;
+        opt.textContent = `${k.cardMasked || 'Card'} (${k.dataKey.substring(0, 10)}...) - ${k.source || 'Moneris'} [${k.date || ''}]`;
+        if (idx === 0) opt.selected = true;
+        monerisSavedTokensSelect.appendChild(opt);
+    });
+
+    const customOpt = document.createElement('option');
+    customOpt.value = 'custom';
+    customOpt.textContent = '✏️ Enter custom data_key manually...';
+    monerisSavedTokensSelect.appendChild(customOpt);
+
+    if (keys[0] && monerisVaultDataKeyInput && !monerisVaultDataKeyInput.value) {
+        monerisVaultDataKeyInput.value = keys[0].dataKey;
+    }
+}
+
+function selectMonerisSavedTokenForPayment(tokenKey) {
+    if (!tokenKey) return;
+    log(`[Moneris Vault] Selected saved token: ${tokenKey}. Switching to 'Pay with Saved Data Key'...`, 'system');
+    
+    // Switch checkout method to vault
+    if (checkoutMethodSelect) {
+        checkoutMethodSelect.value = 'vault';
+    }
+    updateCheckoutMethodUI();
+
+    populateSavedDataKeysDropdown();
+    if (monerisSavedTokensSelect) {
+        monerisSavedTokensSelect.value = tokenKey;
+    }
+    if (monerisVaultDataKeyInput) {
+        monerisVaultDataKeyInput.value = tokenKey;
+    }
+
+    // Scroll config form into view
+    if (configForm) {
+        configForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 }
 
@@ -324,16 +429,18 @@ const SUPPORTED_PSPS = {
         defaultCurrency: 'CAD',
         defaultMethod: 'sdk',
         supportedMethods: [
-            { id: 'sdk', label: 'Inline Drop-in SDK' }
+            { id: 'sdk', label: 'Moneris Checkout (MCO Drop-in)' },
+            { id: 'vault', label: 'Pay with Saved Data Key (Vault)' }
         ],
         features: {
-            checkoutMethod: false,
-            mitType: false,
+            checkoutMethod: true,
+            mitType: true,
             customSettings: false
         },
         containerId: 'moneris-checkout-ui',
         buttonText: {
-            sdk: 'Initialize Moneris Checkout (MCO)'
+            sdk: 'Initialize Moneris Checkout (MCO)',
+            vault: 'Pay with Saved Data Key'
         },
         previewTexts: {
             sdk: {
@@ -341,9 +448,19 @@ const SUPPORTED_PSPS = {
                 subtitle: 'Secure interactive iframe rendered by Moneris Checkout JS SDK.',
                 placeholderTitle: 'Ready to Initialize Moneris Checkout',
                 placeholderText: 'Configure parameters and click "Initialize Moneris Checkout (MCO)" to load the secure inline drop-in.'
+            },
+            vault: {
+                title: '2. Moneris Vault Payment UI',
+                subtitle: 'Process subsequent card-on-file or recurring payments using a saved token (data_key).',
+                placeholderTitle: 'Ready to Pay with Saved Data Key',
+                placeholderText: 'Select a saved token from Moneris Checkout and click "Pay with Saved Data Key" to process a server-side Vault transaction.'
             }
         },
-        checkSdkAvailable: () => typeof window.monerisCheckout === 'function',
+        checkSdkAvailable: () => {
+            const method = checkoutMethodSelect ? checkoutMethodSelect.value : 'sdk';
+            if (method === 'vault') return true;
+            return typeof window.monerisCheckout === 'function';
+        },
         sdkMissingMessage: 'Moneris Checkout SDK script failed to load from CDN. Direct connection testing requires internet access.',
         cleanup: () => {
             if (monerisCheckoutInstance) {
@@ -358,8 +475,153 @@ const SUPPORTED_PSPS = {
                 }
                 monerisCheckoutInstance = null;
             }
+            if (monerisVaultContainer) {
+                monerisVaultContainer.innerHTML = '';
+                monerisVaultContainer.classList.add('hidden');
+            }
         },
         mount: async (sessionData, context) => {
+            // FLOW A: MONERIS VAULT (Pay with Saved data_key)
+            if (sessionData.checkoutMethod === 'vault') {
+                log(`[Moneris Vault] Preparing Vault payment for DataKey: ${sessionData.dataKey}...`, 'system');
+                if (monerisVaultContainer) {
+                    monerisVaultContainer.classList.remove('hidden');
+                    monerisVaultContainer.innerHTML = '';
+                }
+                if (monerisContainer) monerisContainer.classList.add('hidden');
+                if (sdkContainer) sdkContainer.classList.add('hidden');
+
+                const actionType = sessionData.action || 'purchase';
+                const submitBtnLabel = `Confirm & Pay $${sessionData.amount} ${sessionData.currency} with Data Key`;
+
+                // Retrieve token info if saved
+                const allSaved = getSavedMonerisDataKeys();
+                const matchedToken = allSaved.find(k => k.dataKey === sessionData.dataKey);
+                const cardLabel = matchedToken ? matchedToken.cardMasked : 'Saved Card Profile';
+
+                if (monerisVaultContainer) {
+                    monerisVaultContainer.innerHTML = `
+                        <div class="vault-container">
+                            <div class="vault-header">
+                                <div class="vault-title">
+                                    <span>🔐 Moneris Vault (Card on File)</span>
+                                </div>
+                                <span class="vault-security-badge">
+                                    <span>🔒</span> Zero-PCI Vault Token
+                                </span>
+                            </div>
+
+                            <div class="vault-token-card">
+                                <div class="vault-token-chip">💳</div>
+                                <div>
+                                    <div class="vault-token-meta">SAVED MONERIS TOKEN</div>
+                                    <div class="vault-token-number">${sessionData.dataKey}</div>
+                                </div>
+                                <div class="vault-token-meta">
+                                    <span>${cardLabel}</span>
+                                    <span>${sessionData.expDate ? `EXP: ${sessionData.expDate}` : 'VAULT PROFILE'}</span>
+                                </div>
+                            </div>
+
+                            <div class="vault-details-list">
+                                <strong>Order ID:</strong> ${sessionData.order_no}<br>
+                                <strong>Amount:</strong> $${sessionData.amount} ${sessionData.currency}<br>
+                                <strong>Customer ID:</strong> ${(customerRefInput && customerRefInput.value.trim()) || '1'}<br>
+                                <strong>Crypt Type:</strong> ${sessionData.cryptType || '7'}<br>
+                                <strong>Transaction Type:</strong> ${actionType === 'purchase' ? 'Vault Purchase (res_purchase_cc)' : 'Card Verification (res_cardverification_cc)'}
+                            </div>
+
+                            <button type="button" id="btn-vault-confirm-pay" class="vault-submit-btn">
+                                <span>${submitBtnLabel}</span>
+                            </button>
+                        </div>
+                    `;
+                }
+
+                const vaultConfirmBtn = document.getElementById('btn-vault-confirm-pay');
+                const executeVaultPayment = async () => {
+                    if (vaultConfirmBtn) {
+                        vaultConfirmBtn.disabled = true;
+                        vaultConfirmBtn.textContent = 'Processing Vault Transaction...';
+                    }
+                    log(`[Moneris Vault] Submitting ${actionType} transaction for data_key '${sessionData.dataKey}' to backend...`, 'system');
+
+                    try {
+                        const processRes = await fetch('/api/moneris-process-token', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                dataKey: sessionData.dataKey,
+                                orderNo: sessionData.order_no,
+                                amount: sessionData.amount,
+                                custId: (customerRefInput && customerRefInput.value.trim()) || '1',
+                                action: actionType,
+                                cryptType: sessionData.cryptType || '7',
+                                mitType: (mitTypeSelect && mitTypeSelect.value) || null,
+                                expDate: sessionData.expDate || undefined
+                            })
+                        });
+
+                        const resultData = await processRes.json();
+                        log(`[Moneris Vault Response] Status: ${processRes.status}, Body: ${JSON.stringify(resultData)}`, resultData.success ? 'success' : 'error');
+
+                        if (!processRes.ok && !resultData.receipt) {
+                            throw new Error(resultData.error || `HTTP ${processRes.status}`);
+                        }
+
+                        const receipt = resultData.receipt || {};
+                        const isApproved = resultData.success;
+                        const authCode = receipt.AuthCode || 'N/A';
+                        const refNum = receipt.ReferenceNum || 'N/A';
+                        const txnNum = receipt.TxnNumber || receipt.TransID || 'N/A';
+                        const receiptId = receipt.ReceiptId || sessionData.order_no;
+                        const message = receipt.Message || (isApproved ? 'APPROVED' : 'DECLINED');
+
+                        let title = isApproved ? 'Moneris Vault Payment Complete!' : 'Moneris Payment Declined';
+                        let subtitle = isApproved
+                            ? `Payment of $${sessionData.amount} ${sessionData.currency} was successfully charged to saved token.`
+                            : `Gateway response: ${message}`;
+
+                        cleanupExistingSession();
+                        if (sdkContainer) {
+                            sdkContainer.classList.remove('hidden');
+                            sdkContainer.innerHTML = `
+                                <div class="card-success-message" style="text-align: center; padding: 40px 20px; animation: fadeIn 0.4s ease-out;">
+                                    <div style="font-size: 3rem; margin-bottom: 16px;">${isApproved ? '✅' : '❌'}</div>
+                                    <h3 style="color: ${isApproved ? 'var(--success)' : 'var(--error)'}; font-weight: 700; margin-bottom: 8px;">${title}</h3>
+                                    <p style="font-size: 0.85rem; color: var(--text-main); margin-bottom: 16px;">${subtitle}</p>
+                                    <div style="background-color: ${isApproved ? 'var(--success-light)' : 'var(--error-light)'}; color: var(--text-main); border: 1px solid ${isApproved ? 'rgba(56, 161, 105, 0.2)' : 'rgba(229, 62, 62, 0.2)'}; font-family: var(--font-mono); font-size: 0.75rem; padding: 16px; border-radius: var(--radius-md); text-align: left; line-height: 1.7; word-break: break-all;">
+                                        <strong>Order ID:</strong> ${receiptId}<br>
+                                        <strong>Transaction Type:</strong> Vault Purchase (res_purchase_cc)<br>
+                                        <strong>Amount:</strong> $${sessionData.amount} ${sessionData.currency}<br>
+                                        <strong>Status:</strong> <span style="font-weight: 700; color: ${isApproved ? 'var(--success)' : 'var(--error)'};">${isApproved ? 'APPROVED' : 'DECLINED'}</span><br>
+                                        <strong>Gateway Message:</strong> <span style="font-weight: 600; color: ${isApproved ? 'var(--success)' : 'var(--error)'};">${message}</span><br>
+                                        <strong>Response Code:</strong> ${receipt.ResponseCode || 'N/A'}<br>
+                                        <strong>Auth Code:</strong> ${authCode}<br>
+                                        <strong>Reference Num:</strong> ${refNum}<br>
+                                        <strong>Txn Number:</strong> ${txnNum}<br>
+                                        <strong>Charged Data Key:</strong> <span style="color: #2b6cb0; font-weight: 600;">${sessionData.dataKey}</span>
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    } catch (vErr) {
+                        log(`[Moneris Vault Error] Payment execution failed: ${vErr.message}`, 'error');
+                        alert(`Vault payment error: ${vErr.message}`);
+                        if (vaultConfirmBtn) {
+                            vaultConfirmBtn.disabled = false;
+                            vaultConfirmBtn.textContent = submitBtnLabel;
+                        }
+                    }
+                };
+
+                if (vaultConfirmBtn) {
+                    vaultConfirmBtn.addEventListener('click', executeVaultPayment);
+                }
+                return;
+            }
+
+            // FLOW B: MONERIS CHECKOUT MCO (Existing)
             log(`[System] Initializing Moneris Checkout (MCO) with ticket: ${sessionData.ticket}`, 'system');
             if (monerisContainer) monerisContainer.classList.remove('hidden');
             if (sdkContainer) sdkContainer.classList.add('hidden');
@@ -409,43 +671,73 @@ const SUPPORTED_PSPS = {
                     const receiptData = await receiptRes.json();
                     log(`[Proxy Moneris] Receipt Status: ${JSON.stringify(receiptData.response ? receiptData.response.receipt : receiptData)}`, 'success');
 
-                    const receipt = receiptData?.response?.receipt?.cc;
-                    const tokenize = receipt?.tokenize;
+                    const rawReceipt = receiptData?.response?.receipt || {};
+                    const ccReceipt = rawReceipt.cc || rawReceipt;
+                    const tokenize = ccReceipt?.tokenize || rawReceipt?.tokenize;
                     const hasToken = tokenize?.success === 'true' && Boolean(tokenize?.datakey);
-                    const amount = receipt?.amount;
+                    const amount = ccReceipt?.amount || rawReceipt?.amount;
                     const isZeroDollar = amount === '0.00' || amount === '0';
 
-                    let title = 'Moneris Transaction Complete!';
-                    let subtitle = 'The transaction was processed successfully by Moneris.';
+                    // Check approval status according to Moneris Checkout specifications
+                    const resultCode = String(rawReceipt.result || ccReceipt.result || '').toLowerCase();
+                    const responseCodeStr = String(ccReceipt.response_code || rawReceipt.response_code || '');
+                    const responseCodeNum = parseInt(responseCodeStr, 10);
+                    const gatewayMessage = ccReceipt.message || rawReceipt.message || '';
+                    const approvalCode = ccReceipt.approval_code || rawReceipt.approval_code;
+                    const hasValidApprovalCode = Boolean(approvalCode && approvalCode !== 'null' && String(approvalCode).trim() !== '');
 
-                    if (isZeroDollar && hasToken) {
-                        title = 'Card Successfully Verified & Saved!';
-                        subtitle = 'Zero-dollar authorization approved and card securely tokenized.';
-                    } else if (hasToken) {
-                        title = 'Payment & Card Registration Complete!';
-                        subtitle = amount ? `Payment of $${amount} CAD processed and card tokenized.` : 'Payment processed and card tokenized.';
-                    } else if (amount && !isZeroDollar) {
-                        title = 'Moneris Payment Complete!';
-                        subtitle = `Payment of $${amount} CAD was successfully approved.`;
+                    const isApproved = (resultCode === 'a') || 
+                        (!resultCode && !isNaN(responseCodeNum) && responseCodeNum >= 0 && responseCodeNum < 50 && hasValidApprovalCode && !gatewayMessage.toUpperCase().includes('DECLIN'));
+
+                    let title = '';
+                    let subtitle = '';
+
+                    if (isApproved) {
+                        if (isZeroDollar && hasToken) {
+                            title = 'Card Successfully Verified & Saved!';
+                            subtitle = 'Zero-dollar authorization approved and card securely tokenized.';
+                        } else if (hasToken) {
+                            title = 'Payment & Card Registration Complete!';
+                            subtitle = amount ? `Payment of $${amount} CAD processed and card tokenized.` : 'Payment processed and card tokenized.';
+                        } else {
+                            title = 'Moneris Payment Complete!';
+                            subtitle = amount ? `Payment of $${amount} CAD was successfully approved.` : 'Payment was successfully approved.';
+                        }
+                    } else {
+                        title = 'Moneris Payment Declined';
+                        subtitle = gatewayMessage ? `Gateway response: ${gatewayMessage}` : 'The transaction was declined by Moneris.';
                     }
 
-                    const cardMasked = tokenize?.first4last4 || receipt?.first6last4 || null;
+                    const cardMasked = tokenize?.first4last4 || ccReceipt?.first6last4 || rawReceipt?.first6last4 || null;
 
                     let detailsHtml = `<strong>Order No:</strong> ${sessionData.order_no}<br><strong>Ticket:</strong> ${sessionData.ticket}`;
                     if (amount !== undefined && amount !== null) {
                         detailsHtml += `<br><strong>Amount:</strong> $${amount} CAD`;
                     }
-                    if (receipt?.approval_code) {
-                        detailsHtml += `<br><strong>Approval Code:</strong> ${receipt.approval_code}`;
+                    detailsHtml += `<br><strong>Status:</strong> <span style="font-weight: 700; color: ${isApproved ? 'var(--success)' : 'var(--error)'};">${isApproved ? 'APPROVED' : 'DECLINED'}</span>`;
+                    if (gatewayMessage) {
+                        detailsHtml += `<br><strong>Gateway Message:</strong> <span style="color: ${isApproved ? 'var(--success)' : 'var(--error)'}; font-weight: 600;">${gatewayMessage}</span>`;
                     }
-                    if (receipt?.transaction_no) {
-                        detailsHtml += `<br><strong>Txn No:</strong> ${receipt.transaction_no}`;
+                    if (responseCodeStr) {
+                        detailsHtml += `<br><strong>Response Code:</strong> ${responseCodeStr}`;
+                    }
+                    if (hasValidApprovalCode) {
+                        detailsHtml += `<br><strong>Approval Code:</strong> ${approvalCode}`;
+                    }
+                    if (ccReceipt?.transaction_no || rawReceipt?.transaction_no) {
+                        detailsHtml += `<br><strong>Txn No:</strong> ${ccReceipt.transaction_no || rawReceipt.transaction_no}`;
                     }
                     if (cardMasked) {
                         detailsHtml += `<br><strong>Card:</strong> ${cardMasked}`;
                     }
                     if (hasToken) {
-                        detailsHtml += `<br><strong>Vault Token (data_key):</strong> <span style="color: #2b6cb0; font-weight: 600;">${tokenize.datakey}</span>`;
+                        saveMonerisDataKey({
+                            dataKey: tokenize.datakey,
+                            cardMasked: cardMasked || '•••• •••• •••• ••••',
+                            source: 'Moneris Checkout (MCO)'
+                        });
+                        detailsHtml += `<br><strong>Vault Token (data_key):</strong> <span style="color: #2b6cb0; font-weight: 600;">${tokenize.datakey}</span><br>`;
+                        detailsHtml += `<button type="button" class="btn-use-saved-token" data-token="${tokenize.datakey}">💳 Pay Next Order with This Saved Token</button>`;
                     }
 
                     cleanupExistingSession();
@@ -453,10 +745,10 @@ const SUPPORTED_PSPS = {
                         sdkContainer.classList.remove('hidden');
                         sdkContainer.innerHTML = `
                             <div class="card-success-message" style="text-align: center; padding: 40px 20px; animation: fadeIn 0.4s ease-out;">
-                                <div style="font-size: 3rem; margin-bottom: 16px;">✅</div>
-                                <h3 style="color: var(--success); font-weight: 700; margin-bottom: 8px;">${title}</h3>
+                                <div style="font-size: 3rem; margin-bottom: 16px;">${isApproved ? '✅' : '❌'}</div>
+                                <h3 style="color: ${isApproved ? 'var(--success)' : 'var(--error)'}; font-weight: 700; margin-bottom: 8px;">${title}</h3>
                                 <p style="font-size: 0.85rem; color: var(--text-main); margin-bottom: 16px;">${subtitle}</p>
-                                <div style="background-color: var(--success-light); color: var(--success); border: 1px solid rgba(56, 161, 105, 0.2); font-family: var(--font-mono); font-size: 0.75rem; padding: 12px; border-radius: var(--radius-md); word-break: break-all; text-align: left; line-height: 1.6;">
+                                <div style="background-color: ${isApproved ? 'var(--success-light)' : 'var(--error-light)'}; color: var(--text-main); border: 1px solid ${isApproved ? 'rgba(56, 161, 105, 0.2)' : 'rgba(229, 62, 62, 0.2)'}; font-family: var(--font-mono); font-size: 0.75rem; padding: 12px; border-radius: var(--radius-md); word-break: break-all; text-align: left; line-height: 1.6;">
                                     ${detailsHtml}
                                 </div>
                             </div>
@@ -578,6 +870,13 @@ function updateCheckoutMethodUI() {
     const psp = getSelectedPsp();
     const method = checkoutMethodSelect ? checkoutMethodSelect.value : psp.defaultMethod;
     
+    if (monerisVaultSettingsContainer) {
+        monerisVaultSettingsContainer.style.display = (psp.id === 'moneris' && method === 'vault') ? 'block' : 'none';
+        if (psp.id === 'moneris' && method === 'vault') {
+            populateSavedDataKeysDropdown();
+        }
+    }
+
     const previewTitle = document.getElementById('preview-section-title');
     const previewSubtitle = document.getElementById('preview-section-subtitle');
     const placeholderTitle = document.getElementById('placeholder-title');
@@ -609,6 +908,11 @@ function cleanupExistingSession() {
             }
         }
     });
+
+    if (monerisVaultContainer) {
+        monerisVaultContainer.innerHTML = '';
+        monerisVaultContainer.classList.add('hidden');
+    }
 
     if (sdkContainer) {
         sdkContainer.innerHTML = '';
@@ -652,6 +956,11 @@ async function createCheckoutSession() {
         checkoutMethod: checkoutMethod,
         disableSavedCards: disableSavedCards,
         locale: localeSelect ? localeSelect.value : 'en-GB',
+        dataKey: monerisVaultDataKeyInput ? monerisVaultDataKeyInput.value.trim() : undefined,
+        monerisVaultDataKey: monerisVaultDataKeyInput ? monerisVaultDataKeyInput.value.trim() : undefined,
+        monerisVaultExpDate: monerisVaultExpDateInput ? monerisVaultExpDateInput.value.trim() : undefined,
+        monerisVaultCryptType: monerisVaultCryptTypeSelect ? monerisVaultCryptTypeSelect.value : '7',
+        monerisActionType: (checkoutMethod === 'vault' && monerisVaultActionTypeSelect) ? monerisVaultActionTypeSelect.value : 'purchase',
         orderPayload: {
             customer_ref: customerRef,
             charge: {
@@ -768,6 +1077,48 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Populate PSP select from registry
     populatePspSelect();
+
+    // Populate any saved Moneris tokens from localStorage
+    populateSavedDataKeysDropdown();
+
+    // Handle selecting a saved token from dropdown
+    if (monerisSavedTokensSelect) {
+        monerisSavedTokensSelect.addEventListener('change', function() {
+            if (this.value === 'custom') {
+                if (monerisVaultDataKeyInput) {
+                    monerisVaultDataKeyInput.value = '';
+                    monerisVaultDataKeyInput.placeholder = 'Paste custom data_key here...';
+                    monerisVaultDataKeyInput.focus();
+                }
+            } else if (this.value) {
+                if (monerisVaultDataKeyInput) {
+                    monerisVaultDataKeyInput.value = this.value;
+                }
+            }
+        });
+    }
+
+    // Handle clear saved tokens
+    if (btnClearSavedTokens) {
+        btnClearSavedTokens.addEventListener('click', () => {
+            if (confirm('Are you sure you want to clear all locally saved Moneris tokens?')) {
+                localStorage.removeItem(STORAGE_KEY_MONERIS_TOKENS);
+                populateSavedDataKeysDropdown();
+                log('[Moneris Vault] Cleared all saved tokens from local storage.', 'system');
+            }
+        });
+    }
+
+    // Delegated 1-click listener for 'Pay Next Order with This Saved Token' buttons
+    document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-use-saved-token');
+        if (btn) {
+            const token = btn.getAttribute('data-token');
+            if (token) {
+                selectMonerisSavedTokenForPayment(token);
+            }
+        }
+    });
 
     // Attach checkout method and PSP change listeners
     if (checkoutMethodSelect) {

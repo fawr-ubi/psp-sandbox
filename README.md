@@ -21,6 +21,7 @@ The application includes a zero-dependency local Node.js proxy server that reads
     - **Hosted Payment Link**: Automates the 4-step backend generation pipeline, appending `sdkVersion=2`, and renders a redirection screen.
   - **Moneris**:
     - **Moneris Checkout (MCO) Inline SDK**: Performs server-to-server `preload` to acquire a ticket and renders the interactive iframe form using `monerisCheckout`. Includes automated `/api/moneris-receipt` server verification upon completion.
+    - **Pay with Saved Data Key (Moneris Vault)**: Automatically saves tokens (`data_key`) generated from Moneris Checkout. Allows paying subsequent orders directly using the stored Vault token via server-to-server `res_purchase_cc` transactions with customizable crypt types (`7` SSL E-Commerce, `1` Recurring, `2` Installment) and MIT Credential-on-File support.
 - **Dynamic Controls & Theme Customizer**:
   - Custom customer reference, currency, and amount.
   - Dynamic **Locale Selector** and **Theme Customizer** for Littlepay Drop-in.
@@ -123,6 +124,14 @@ Adding a new PSP requires only two simple steps:
    Open your browser and navigate to:
    👉 **`http://localhost:8000`**
 
-4. **Test Moneris Integration**:
+4. **Test Moneris Checkout (MCO)**:
    - In the **Payment Service Provider (PSP)** dropdown, select **Moneris**.
-   - Click **Initialize Moneris Checkout (MCO)** to load the secure inline iframe drop-in.
+   - In the **Checkout Method** dropdown, select **Moneris Checkout (MCO Drop-in)**.
+   - Click **Initialize Moneris Checkout (MCO)** to load the full drop-in modal.
+   - Upon successful payment/tokenization, the `data_key` is automatically saved to local storage, and a **Pay Next Order with This Saved Token** button appears directly on the receipt card.
+
+5. **Test Pay with Saved Data Key (Moneris Vault)**:
+   - In the **Checkout Method** dropdown, select **Pay with Saved Data Key (Vault)**.
+   - Select one of your previously saved tokens from the dropdown (or manually enter a custom `data_key`).
+   - Choose the transaction type (**Purchase** or **Zero-Dollar Verification**) and Crypt Type (`7` SSL E-Commerce, `1` Recurring, `2` Installment).
+   - Click **Pay with Saved Data Key** to render the Vault card summary and execute the server-to-server Moneris Vault purchase.

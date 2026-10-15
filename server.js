@@ -33,12 +33,37 @@ if (fs.existsSync('env.local.json')) {
 }
 
 /**
+ * Helper to log and send JSON response from local server
+ */
+function sendJsonResponse(res, statusCode, data, routeName = '') {
+    const jsonStr = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    console.log(`\n============================================================`);
+    console.log(`[Server Response] ${routeName} -> Status ${statusCode}`);
+    console.log(`[Response Payload]:\n${jsonStr}`);
+    console.log(`============================================================\n`);
+    res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+    res.end(jsonStr);
+}
+
+/**
  * Modern Promise wrapper around Node's native HTTPS request module (Zero Dependencies)
+ * Logs the full request payload and response body for all upstream gateway calls
  */
 function makeHttpsRequest(urlStr, method, headers, requestBody) {
     return new Promise((resolve, reject) => {
         try {
             const parsedUrl = new url.URL(urlStr);
+
+            console.log(`\n------------------------------------------------------------`);
+            console.log(`[Upstream HTTPS Request] ${method} ${urlStr}`);
+            if (headers) {
+                console.log(`[Upstream Headers]:`, JSON.stringify(headers, null, 2));
+            }
+            if (requestBody) {
+                console.log(`[Upstream Payload]:\n${requestBody}`);
+            }
+            console.log(`------------------------------------------------------------\n`);
+
             const options = {
                 hostname: parsedUrl.hostname,
                 port: 443,
@@ -56,6 +81,11 @@ function makeHttpsRequest(urlStr, method, headers, requestBody) {
                     resBody += chunk;
                 });
                 res.on('end', () => {
+                    console.log(`\n------------------------------------------------------------`);
+                    console.log(`[Upstream HTTPS Response] ${method} ${urlStr} -> ${res.statusCode} ${res.statusMessage}`);
+                    console.log(`[Upstream Response Body]:\n${resBody}`);
+                    console.log(`------------------------------------------------------------\n`);
+
                     resolve({
                         statusCode: res.statusCode,
                         statusMessage: res.statusMessage,
@@ -66,6 +96,7 @@ function makeHttpsRequest(urlStr, method, headers, requestBody) {
             });
 
             req.on('error', (err) => {
+                console.error(`[Upstream HTTPS Error] ${method} ${urlStr}:`, err.message);
                 reject(err);
             });
 
@@ -82,24 +113,76 @@ function makeHttpsRequest(urlStr, method, headers, requestBody) {
 // =============================================================================
 
 /**
- * Moneris Session Preload Handler (Moneris Checkout MCO)
+ * Parses Moneris Gateway XML Receipt into a clean key-value dictionary
+ */
+function parseMonerisXmlReceipt(xmlStr) {
+    const result = {};
+    if (!xmlStr) return result;
+    const tagRegex = /<([a-zA-Z0-9_]+)>([^<]*)<\/\1>/g;
+    let match;
+    while ((match = tagRegex.exec(xmlStr)) !== null) {
+        result[match[1]] = match[2];
+    }
+    return result;
+}
+
+/**
+ * Moneris Session Handler
+ * Supports:
+ * - 'vault': Moneris Vault (Pay with saved data_key)
+ * - 'sdk': Moneris Checkout (MCO) Ticket Preload
  */
 async function handleMonerisSession(sessionParams, res) {
-    const { orderPayload } = sessionParams;
+    const { orderPayload, checkoutMethod } = sessionParams;
     const storeId = (process.env.MONERIS_STORE_ID || '').trim();
     const apiToken = (process.env.MONERIS_API_TOKEN || '').trim();
     const checkoutId = (process.env.MONERIS_CHECKOUT_ID || '').trim();
     const envMode = (process.env.MONERIS_ENV || 'qa').trim().toLowerCase();
 
+    // -------------------------------------------------------------------------
+    // FLOW A: MONERIS VAULT (Pay with Saved data_key)
+    // -------------------------------------------------------------------------
+    if (checkoutMethod === 'vault') {
+        const dataKey = (sessionParams.dataKey || sessionParams.monerisVaultDataKey || '').trim();
+        if (!dataKey) {
+            sendJsonResponse(res, 400, {
+                error: 'A saved data_key is required to pay with Moneris Vault. Please select or enter a data_key.'
+            }, 'handleMonerisSession Error');
+            return;
+        }
+
+        const chargeAmount = orderPayload && orderPayload.charge ? (orderPayload.charge.amount / 100).toFixed(2) : '10.00';
+        const orderNo = `ORDER-${Date.now()}`;
+
+        sendJsonResponse(res, 200, {
+            psp: 'moneris',
+            checkoutMethod: 'vault',
+            dataKey: dataKey,
+            order_no: orderNo,
+            amount: chargeAmount,
+            currency: (orderPayload && orderPayload.charge && orderPayload.charge.currency) || 'CAD',
+            environment: envMode,
+            expDate: (sessionParams.monerisVaultExpDate || '').trim(),
+            cryptType: (sessionParams.monerisVaultCryptType || '7').trim(),
+            action: sessionParams.monerisActionType || 'purchase'
+        }, 'handleMonerisSession (Vault)');
+        return;
+    }
+
+    // -------------------------------------------------------------------------
+    // FLOW B: MONERIS CHECKOUT (MCO Ticket Preload)
+    // -------------------------------------------------------------------------
     if (!storeId || storeId === 'FILLME' || !apiToken || apiToken === 'FILLME') {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'MONERIS_STORE_ID or MONERIS_API_TOKEN is not configured or set to FILLME. Please check your env.local.json file.' }));
+        sendJsonResponse(res, 400, {
+            error: 'MONERIS_STORE_ID or MONERIS_API_TOKEN is not configured or set to FILLME. Please check your env.local.json file.'
+        }, 'handleMonerisSession Error');
         return;
     }
 
     if (!checkoutId || checkoutId === 'FILLME') {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'MONERIS_CHECKOUT_ID is not configured or set to FILLME. Please configure MONERIS_CHECKOUT_ID in your env.local.json file.' }));
+        sendJsonResponse(res, 400, {
+            error: 'MONERIS_CHECKOUT_ID is not configured or set to FILLME. Please configure MONERIS_CHECKOUT_ID in your env.local.json file.'
+        }, 'handleMonerisSession Error');
         return;
     }
 
@@ -122,6 +205,10 @@ async function handleMonerisSession(sessionParams, res) {
         order_no: orderNo
     };
 
+    if (orderPayload && orderPayload.token) {
+        preloadPayload.token = orderPayload.token;
+    }
+
     if (orderPayload && orderPayload.customer_ref) {
         preloadPayload.cust_id = String(orderPayload.customer_ref);
     }
@@ -136,8 +223,6 @@ async function handleMonerisSession(sessionParams, res) {
         JSON.stringify(preloadPayload)
     );
 
-    console.log(`[Proxy Moneris] MCO Preload Response (${mcoRes.statusCode}):`, mcoRes.body);
-
     let parsedData;
     try {
         parsedData = JSON.parse(mcoRes.body);
@@ -146,22 +231,20 @@ async function handleMonerisSession(sessionParams, res) {
     }
 
     if (parsedData && parsedData.response && parsedData.response.ticket) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+        sendJsonResponse(res, 200, {
             psp: 'moneris',
             checkoutMethod: 'sdk',
             ticket: parsedData.response.ticket,
             environment: envMode,
             order_no: orderNo
-        }));
+        }, 'handleMonerisSession (MCO Preload)');
     } else {
         const errDetail = parsedData && parsedData.response && parsedData.response.error
             ? `${parsedData.response.error.field}: ${parsedData.response.error.message}`
             : mcoRes.body;
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+        sendJsonResponse(res, 400, {
             error: `Moneris Checkout preload failed (${errDetail}). Please verify your MONERIS_STORE_ID, MONERIS_API_TOKEN, MONERIS_CHECKOUT_ID, and MONERIS_ENV.`
-        }));
+        }, 'handleMonerisSession Error');
     }
 }
 
@@ -173,8 +256,9 @@ async function handleLittlepaySession(sessionParams, res) {
     const apiKey = process.env.LITTLEPAY_API_KEY;
 
     if (!apiKey) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'LITTLEPAY_API_KEY environment variable is not configured on the server. Please check your env.json file.' }));
+        sendJsonResponse(res, 400, {
+            error: 'LITTLEPAY_API_KEY environment variable is not configured on the server. Please check your env.json file.'
+        }, 'handleLittlepaySession Error');
         return;
     }
 
@@ -193,8 +277,7 @@ async function handleLittlepaySession(sessionParams, res) {
 
     if (orderRes.statusCode < 200 || orderRes.statusCode >= 300) {
         console.error(`[Proxy Littlepay] Order creation failed with status ${orderRes.statusCode}:`, orderRes.body);
-        res.writeHead(orderRes.statusCode, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: `Order creation failed: ${orderRes.body}` }));
+        sendJsonResponse(res, orderRes.statusCode, { error: `Order creation failed: ${orderRes.body}` }, 'handleLittlepaySession Error');
         return;
     }
 
@@ -220,8 +303,7 @@ async function handleLittlepaySession(sessionParams, res) {
 
         if (captureRes.statusCode < 200 || captureRes.statusCode >= 300) {
             console.error(`[Proxy Littlepay] PATCH Capture failed with status ${captureRes.statusCode}:`, captureRes.body);
-            res.writeHead(captureRes.statusCode, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: `Setting capture method to AUTO failed: ${captureRes.body}` }));
+            sendJsonResponse(res, captureRes.statusCode, { error: `Setting capture method to AUTO failed: ${captureRes.body}` }, 'handleLittlepaySession Error');
             return;
         }
 
@@ -240,8 +322,7 @@ async function handleLittlepaySession(sessionParams, res) {
 
             if (optionsRes.statusCode < 200 || optionsRes.statusCode >= 300) {
                 console.error(`[Proxy Littlepay] Setting MIT options failed with status ${optionsRes.statusCode}:`, optionsRes.body);
-                res.writeHead(optionsRes.statusCode, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: `Setting MIT options failed: ${optionsRes.body}` }));
+                sendJsonResponse(res, optionsRes.statusCode, { error: `Setting MIT options failed: ${optionsRes.body}` }, 'handleLittlepaySession Error');
                 return;
             }
         } else {
@@ -271,8 +352,7 @@ async function handleLittlepaySession(sessionParams, res) {
 
         if (linkRes.statusCode < 200 || linkRes.statusCode >= 300) {
             console.error(`[Proxy Littlepay] Create payment link failed with status ${linkRes.statusCode}:`, linkRes.body);
-            res.writeHead(linkRes.statusCode, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: `Create payment link failed: ${linkRes.body}` }));
+            sendJsonResponse(res, linkRes.statusCode, { error: `Create payment link failed: ${linkRes.body}` }, 'handleLittlepaySession Error');
             return;
         }
 
@@ -290,15 +370,14 @@ async function handleLittlepaySession(sessionParams, res) {
 
         console.log(`[Proxy Littlepay] Payment link created successfully (sdkVersion=2 added)! URL: ${finalLinkUrl}`);
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+        sendJsonResponse(res, 200, {
             psp: 'littlepay',
             checkoutMethod: 'link',
             url: finalLinkUrl,
             id: orderId,
             payment_intent_id: paymentIntentId,
             linkData: linkData
-        }));
+        }, 'handleLittlepaySession (Hosted Link)');
 
     } else {
         // Flow B: SDK INLINE (2 steps)
@@ -317,8 +396,7 @@ async function handleLittlepaySession(sessionParams, res) {
 
             if (optionsRes.statusCode < 200 || optionsRes.statusCode >= 300) {
                 console.error(`[Proxy Littlepay] Setting MIT options failed with status ${optionsRes.statusCode}:`, optionsRes.body);
-                res.writeHead(optionsRes.statusCode, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: `Setting MIT options failed: ${optionsRes.body}` }));
+                sendJsonResponse(res, optionsRes.statusCode, { error: `Setting MIT options failed: ${optionsRes.body}` }, 'handleLittlepaySession Error');
                 return;
             }
             console.log(`[Proxy Littlepay] MIT Setup complete (204).`);
@@ -328,14 +406,13 @@ async function handleLittlepaySession(sessionParams, res) {
 
         console.log(`[Proxy Littlepay] Returning client_token to client.`);
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+        sendJsonResponse(res, 200, {
             psp: 'littlepay',
             checkoutMethod: 'sdk',
             client_token: orderData.client_token,
             payment_intent_id: paymentIntentId,
             id: orderId
-        }));
+        }, 'handleLittlepaySession (Inline SDK)');
     }
 }
 
@@ -366,24 +443,27 @@ const server = http.createServer((req, res) => {
         });
 
         req.on('end', async () => {
+            console.log(`\n============================================================`);
+            console.log(`[Incoming Request] POST /api/create-session`);
+            console.log(`[Request Payload]:\n${body}`);
+            console.log(`============================================================\n`);
+
             try {
                 const sessionParams = JSON.parse(body);
                 const psp = sessionParams.psp || 'littlepay';
 
                 const handler = PSP_HANDLERS[psp];
                 if (!handler) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({
+                    sendJsonResponse(res, 400, {
                         error: `Unsupported PSP: '${psp}'. Supported PSPs are: ${Object.keys(PSP_HANDLERS).join(', ')}`
-                    }));
+                    }, 'POST /api/create-session Error');
                     return;
                 }
 
                 await handler(sessionParams, res);
             } catch (err) {
                 console.error('[Proxy Error] Core failure:', err);
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: `Local proxy core failure: ${err.message}` }));
+                sendJsonResponse(res, 500, { error: `Local proxy core failure: ${err.message}` }, 'POST /api/create-session Error');
             }
         });
         return;
@@ -397,6 +477,11 @@ const server = http.createServer((req, res) => {
         });
 
         req.on('end', async () => {
+            console.log(`\n============================================================`);
+            console.log(`[Incoming Request] POST /api/moneris-receipt`);
+            console.log(`[Request Payload]:\n${body}`);
+            console.log(`============================================================\n`);
+
             try {
                 const { ticket } = JSON.parse(body);
                 const storeId = process.env.MONERIS_STORE_ID;
@@ -405,8 +490,7 @@ const server = http.createServer((req, res) => {
                 const envMode = process.env.MONERIS_ENV || 'qa';
 
                 if (!checkoutId || checkoutId === 'FILLME') {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'MONERIS_CHECKOUT_ID is not configured or set to FILLME. Please configure MONERIS_CHECKOUT_ID in your env.local.json file.' }));
+                    sendJsonResponse(res, 400, { error: 'MONERIS_CHECKOUT_ID is not configured or set to FILLME. Please configure MONERIS_CHECKOUT_ID in your env.local.json file.' }, 'POST /api/moneris-receipt Error');
                     return;
                 }
 
@@ -434,15 +518,165 @@ const server = http.createServer((req, res) => {
                 );
 
                 console.log(`[Proxy Moneris] Receipt Verification Response (${receiptRes.statusCode}):`, receiptRes.body);
-                res.writeHead(receiptRes.statusCode, { 'Content-Type': 'application/json' });
-                res.end(receiptRes.body);
+                sendJsonResponse(res, receiptRes.statusCode, receiptRes.body, 'POST /api/moneris-receipt');
 
             } catch (err) {
                 console.error('[Proxy Moneris Error] Receipt verification error:', err);
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: err.message }));
+                sendJsonResponse(res, 500, { error: err.message }, 'POST /api/moneris-receipt Error');
             }
         });
+        return;
+    }
+
+    // Route: Moneris Vault - Process Saved Token (Purchase or Card Verification)
+    if (req.method === 'POST' && pathname === '/api/moneris-process-token') {
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk;
+        });
+
+        req.on('end', async () => {
+            console.log(`\n============================================================`);
+            console.log(`[Incoming Request] POST /api/moneris-process-token`);
+            console.log(`[Request Payload]:\n${body}`);
+            console.log(`============================================================\n`);
+
+            try {
+                const {
+                    dataKey,
+                    orderNo,
+                    amount,
+                    custId,
+                    action = 'purchase',
+                    cryptType = '7',
+                    mitType,
+                    expDate
+                } = JSON.parse(body);
+
+                const storeId = (process.env.MONERIS_STORE_ID || '').trim();
+                const apiToken = (process.env.MONERIS_API_TOKEN || '').trim();
+                const envMode = (process.env.MONERIS_ENV || 'qa').trim().toLowerCase();
+
+                if (!storeId || storeId === 'FILLME' || !apiToken || apiToken === 'FILLME') {
+                    sendJsonResponse(res, 400, {
+                        error: 'MONERIS_STORE_ID or MONERIS_API_TOKEN is not configured or set to FILLME. Please check your env.local.json file to process transactions with the token.'
+                    }, 'POST /api/moneris-process-token Error');
+                    return;
+                }
+
+                if (!dataKey) {
+                    sendJsonResponse(res, 400, { error: 'dataKey (Hosted Token) is required.' }, 'POST /api/moneris-process-token Error');
+                    return;
+                }
+
+                const mpgUrl = envMode === 'prod'
+                    ? 'https://www3.moneris.com/gateway2/servlet/MpgRequest'
+                    : 'https://esqa.moneris.com/gateway2/servlet/MpgRequest';
+
+                const orderId = orderNo || `ORD-${Date.now()}`;
+                const customerId = custId || '1';
+                const formattedAmount = (parseFloat(amount) || 10.00).toFixed(2);
+                const expDateXml = expDate ? `<expdate>${expDate}</expdate>` : '';
+
+                let cofXml = '';
+                if (mitType) {
+                    cofXml = '<cof_info><payment_indicator>U</payment_indicator><payment_information>2</payment_information></cof_info>';
+                }
+
+                let txnXml = '';
+                if (action === 'card_verification') {
+                    txnXml = `<res_cardverification_cc>
+                        <data_key>${dataKey}</data_key>
+                        <order_id>${orderId}</order_id>
+                        <cust_id>${customerId}</cust_id>
+                        <crypt_type>${cryptType}</crypt_type>
+                        ${expDateXml}
+                        ${cofXml}
+                    </res_cardverification_cc>`;
+                } else if (action === 'vault_add') {
+                    txnXml = `<res_add_token>
+                        <data_key>${dataKey}</data_key>
+                        <cust_id>${customerId}</cust_id>
+                        <crypt_type>${cryptType}</crypt_type>
+                        ${expDateXml}
+                        <data_key_format>0</data_key_format>
+                    </res_add_token>`;
+                } else {
+                    // Default: 'purchase'
+                    txnXml = `<res_purchase_cc>
+                        <data_key>${dataKey}</data_key>
+                        <order_id>${orderId}</order_id>
+                        <cust_id>${customerId}</cust_id>
+                        <amount>${formattedAmount}</amount>
+                        <crypt_type>${cryptType}</crypt_type>
+                        ${expDateXml}
+                        ${cofXml}
+                    </res_purchase_cc>`;
+                }
+
+                const xmlPayload = `<?xml version="1.0" encoding="UTF-8"?>
+<request>
+    <store_id>${storeId}</store_id>
+    <api_token>${apiToken}</api_token>
+    <status_check>false</status_check>
+    ${txnXml}
+</request>`;
+
+                console.log(`[Proxy Moneris HT] Sending ${action} transaction for DataKey: ${dataKey.substring(0, 8)}... to ${mpgUrl}...`);
+
+                const mpgRes = await makeHttpsRequest(
+                    mpgUrl,
+                    'POST',
+                    {
+                        'Content-Type': 'application/xml',
+                        'Accept': 'application/xml'
+                    },
+                    xmlPayload
+                );
+
+                console.log(`[Proxy Moneris HT] MpgRequest Response (${mpgRes.statusCode}):`, mpgRes.body);
+
+                const receipt = parseMonerisXmlReceipt(mpgRes.body);
+                const respCodeNum = parseInt(receipt.ResponseCode, 10);
+                const isComplete = String(receipt.Complete).toLowerCase() === 'true';
+                const hasApprovedCode = !isNaN(respCodeNum) && respCodeNum >= 0 && respCodeNum < 50;
+                const isMessageDeclined = String(receipt.Message || '').toUpperCase().includes('DECLIN');
+
+                let isApproved = false;
+                if (action === 'vault_add') {
+                    isApproved = isComplete && String(receipt.ResSuccess).toLowerCase() === 'true';
+                } else {
+                    isApproved = isComplete && hasApprovedCode && !isMessageDeclined;
+                }
+
+                sendJsonResponse(res, 200, {
+                    success: isApproved,
+                    action: action,
+                    orderId: orderId,
+                    amount: action === 'purchase' ? formattedAmount : '0.00',
+                    receipt: receipt,
+                    rawXml: mpgRes.body
+                }, 'POST /api/moneris-process-token');
+
+            } catch (err) {
+                console.error('[Proxy Moneris Error] Process token error:', err);
+                sendJsonResponse(res, 500, { error: err.message }, 'POST /api/moneris-process-token Error');
+            }
+        });
+        return;
+    }
+
+    // Route: Configuration Info for Frontend
+    if (req.method === 'GET' && pathname === '/api/config') {
+        console.log(`\n============================================================`);
+        console.log(`[Incoming Request] GET /api/config`);
+        console.log(`============================================================\n`);
+
+        sendJsonResponse(res, 200, {
+            moneris: {
+                environment: process.env.MONERIS_ENV || 'qa'
+            }
+        }, 'GET /api/config');
         return;
     }
 
