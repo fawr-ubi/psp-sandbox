@@ -49,6 +49,11 @@ const fontFamilySelect = document.getElementById('fontFamily');
 const submitBtn = document.getElementById('btn-submit');
 const unmountBtn = document.getElementById('btn-unmount');
 const clearLogsBtn = document.getElementById('btn-clear-logs');
+const copyAllLogsBtn = document.getElementById('btn-copy-all-logs');
+const expandLogsBtn = document.getElementById('btn-expand-logs');
+const fullscreenLogsBtn = document.getElementById('btn-fullscreen-logs');
+const logsCard = document.getElementById('logs-card');
+const logsCountBadge = document.getElementById('logs-count-badge');
 const logsContainer = document.getElementById('logs-container');
 const sdkPlaceholder = document.getElementById('sdk-placeholder');
 const sdkContainer = document.getElementById('littlepay-dropin-ui');
@@ -61,23 +66,455 @@ const labelPositionSelect = document.getElementById('labelPosition');
 const cardholderDetailSelect = document.getElementById('cardholderDetailFields');
 const disableSavedSelect = document.getElementById('disableSavedCards');
 
+// =============================================================================
+// STRUCTURED LOGGING & PAYMENT ATTEMPT GROUPING SYSTEM
+// =============================================================================
+let logAttemptCounter = 0;
+let activeLogGroup = null;
+const allLogGroups = [];
+
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
 /**
- * Utility to log messages into our simulated console log view
+ * Syntax highlights a formatted JSON string for dark console display
  */
-function log(message, type = 'system') {
+function syntaxHighlightJson(jsonStr) {
+    const escaped = escapeHtml(jsonStr);
+    return escaped.replace(
+        /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+        (match) => {
+            let cls = 'json-number';
+            if (/^"/.test(match)) {
+                if (/:$/.test(match)) {
+                    cls = 'json-key';
+                } else {
+                    cls = 'json-string';
+                }
+            } else if (/true|false/.test(match)) {
+                cls = 'json-boolean';
+            } else if (/null/.test(match)) {
+                cls = 'json-null';
+            }
+            return `<span class="${cls}">${match}</span>`;
+        }
+    );
+}
+
+/**
+ * Extracts a category tag and clean text + optional JSON payload from raw log message
+ */
+function parseLogContent(rawMessage, explicitData = null, type = 'system') {
+    let category = 'SYSTEM';
+    let catClass = 'cat-system';
+    let cleanText = String(rawMessage || '');
+
+    const bracketMatch = cleanText.match(/^\[([^\]]+)\]\s*(.*)$/s);
+    if (bracketMatch) {
+        category = bracketMatch[1];
+        cleanText = bracketMatch[2];
+    }
+
+    const upperCat = category.toUpperCase();
+    if (upperCat.includes('ERROR') || type === 'error') {
+        catClass = 'cat-error';
+    } else if (upperCat.includes('CALLBACK') || type === 'callback') {
+        catClass = 'cat-callback';
+    } else if (upperCat.includes('VAULT')) {
+        catClass = 'cat-vault';
+    } else if (upperCat.includes('PROXY') || upperCat.includes('API')) {
+        catClass = 'cat-api';
+    } else if (type === 'success') {
+        catClass = 'cat-success';
+    }
+
+    let extractedPayload = explicitData;
+
+    if (extractedPayload === null || extractedPayload === undefined) {
+        // Detect trailing JSON object or array in the message string
+        const firstBrace = cleanText.search(/[\{\[]/);
+        if (firstBrace !== -1) {
+            const candidate = cleanText.slice(firstBrace).trim();
+            if ((candidate.startsWith('{') && candidate.endsWith('}')) ||
+                (candidate.startsWith('[') && candidate.endsWith(']'))) {
+                try {
+                    extractedPayload = JSON.parse(candidate);
+                    cleanText = cleanText.slice(0, firstBrace).replace(/[:\s-]+$/, '').trim();
+                } catch (e) {
+                    // Not valid standalone JSON at the end; leave inline
+                }
+            }
+        }
+    } else if (typeof extractedPayload === 'string') {
+        const trimmed = extractedPayload.trim();
+        if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+            (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+            try {
+                extractedPayload = JSON.parse(trimmed);
+            } catch (e) {
+                // Keep as string
+            }
+        }
+    }
+
+    return {
+        category,
+        catClass,
+        cleanText: cleanText || category,
+        payload: extractedPayload
+    };
+}
+
+/**
+ * Copies text to clipboard and flashes button visual state
+ */
+async function copyTextWithFeedback(text, btnElement, defaultLabel = '📋 Copy', copiedLabel = '✅ Copied!') {
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+        } else {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+        }
+        if (btnElement) {
+            btnElement.classList.add('copied');
+            btnElement.textContent = copiedLabel;
+            setTimeout(() => {
+                btnElement.classList.remove('copied');
+                btnElement.textContent = defaultLabel;
+            }, 1800);
+        }
+    } catch (err) {
+        console.error('Clipboard copy failed:', err);
+    }
+}
+
+/**
+ * Updates the attempts counter badge in the logs header
+ */
+function updateLogsCountBadge() {
+    if (!logsCountBadge) return;
+    const paymentAttempts = allLogGroups.filter(g => !g.isSystemGroup).length;
+    logsCountBadge.textContent = `${paymentAttempts} attempt${paymentAttempts === 1 ? '' : 's'}`;
+}
+
+/**
+ * Formats an entire log group as clean plain text for sharing / debugging
+ */
+function formatGroupForClipboard(group) {
+    const headerLine = `=== [${group.title}] (${group.metaText || 'Session'}) - Status: ${group.status.toUpperCase()} ===`;
+    const lines = group.entries.map(item => {
+        let entryLine = `[${item.timestamp}] [${item.category}] ${item.cleanText}`;
+        if (item.payload !== null && item.payload !== undefined) {
+            const formattedPayload = typeof item.payload === 'object'
+                ? JSON.stringify(item.payload, null, 2)
+                : String(item.payload);
+            entryLine += `\n${formattedPayload}`;
+        }
+        return entryLine;
+    });
+    return `${headerLine}\n${lines.join('\n\n')}`;
+}
+
+/**
+ * Creates a new visual group block in the logs window (either a Payment Attempt or System group)
+ */
+function createLogGroup({ isSystemGroup = false, pspId = 'system', pspName = 'System', method = '', amountDisplay = '', customerRef = '' } = {}) {
+    // Remove active highlight from previous group
+    allLogGroups.forEach(g => g.element.classList.remove('active-attempt'));
+
+    let title = 'System & Initialization';
+    let metaText = new Date().toLocaleTimeString();
+    let status = isSystemGroup ? 'system' : 'pending';
+
+    if (!isSystemGroup) {
+        logAttemptCounter += 1;
+        title = `Attempt #${logAttemptCounter} — ${pspName}`;
+        const parts = [];
+        if (method) parts.push(method.toUpperCase());
+        if (amountDisplay) parts.push(amountDisplay);
+        if (customerRef) parts.push(`Cust: ${customerRef}`);
+        parts.push(new Date().toLocaleTimeString());
+        metaText = parts.join(' • ');
+    }
+
+    const groupEl = document.createElement('div');
+    groupEl.className = `log-attempt-group status-${status} ${!isSystemGroup ? 'active-attempt' : ''}`;
+
+    const headerEl = document.createElement('div');
+    headerEl.className = 'log-attempt-header';
+
+    const infoEl = document.createElement('div');
+    infoEl.className = 'log-attempt-info';
+
+    const toggleSpan = document.createElement('span');
+    toggleSpan.className = 'log-attempt-toggle';
+    toggleSpan.textContent = '▼';
+
+    const badgeSpan = document.createElement('span');
+    badgeSpan.className = `log-attempt-badge psp-${pspId}`;
+    badgeSpan.textContent = isSystemGroup ? 'SYS' : pspName;
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'log-attempt-title';
+    titleSpan.textContent = title;
+
+    const metaSpan = document.createElement('span');
+    metaSpan.className = 'log-attempt-meta';
+    metaSpan.textContent = metaText;
+
+    const statusPill = document.createElement('span');
+    statusPill.className = `log-attempt-status-pill ${status}`;
+    statusPill.textContent = isSystemGroup ? 'INFO' : 'IN PROGRESS';
+    if (isSystemGroup) statusPill.style.display = 'none';
+
+    infoEl.appendChild(toggleSpan);
+    infoEl.appendChild(badgeSpan);
+    infoEl.appendChild(titleSpan);
+    infoEl.appendChild(metaSpan);
+    infoEl.appendChild(statusPill);
+
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'log-attempt-actions';
+
+    const copyAttemptBtn = document.createElement('button');
+    copyAttemptBtn.type = 'button';
+    copyAttemptBtn.className = 'btn-copy-attempt';
+    copyAttemptBtn.textContent = isSystemGroup ? '📋 Copy System Logs' : '📋 Copy Attempt Logs';
+
+    actionsEl.appendChild(copyAttemptBtn);
+    headerEl.appendChild(infoEl);
+    headerEl.appendChild(actionsEl);
+
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'log-attempt-body';
+
+    groupEl.appendChild(headerEl);
+    groupEl.appendChild(bodyEl);
+
+    const groupObj = {
+        id: isSystemGroup ? 'sys' : `attempt-${logAttemptCounter}`,
+        isSystemGroup,
+        pspId,
+        pspName,
+        title,
+        metaText,
+        status,
+        element: groupEl,
+        bodyEl,
+        statusPill,
+        metaSpan,
+        entries: []
+    };
+
+    // Toggle collapse when clicking header (except on copy button)
+    headerEl.addEventListener('click', (e) => {
+        if (e.target.closest('.btn-copy-attempt')) return;
+        groupEl.classList.toggle('collapsed');
+    });
+
+    copyAttemptBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const textToCopy = formatGroupForClipboard(groupObj);
+        copyTextWithFeedback(
+            textToCopy,
+            copyAttemptBtn,
+            isSystemGroup ? '📋 Copy System Logs' : '📋 Copy Attempt Logs'
+        );
+    });
+
+    if (logsContainer) {
+        logsContainer.appendChild(groupEl);
+    }
+
+    allLogGroups.push(groupObj);
+    activeLogGroup = groupObj;
+    updateLogsCountBadge();
+    return groupObj;
+}
+
+/**
+ * Starts a new dedicated Payment Attempt section in the logs panel
+ */
+function startPaymentAttemptLog({ pspId, pspName, method, amount, currency, customerRef }) {
+    const formattedAmount = amount !== undefined && amount !== null
+        ? `${(Number(amount) / 100).toFixed(2)} ${currency || ''}`.trim()
+        : '';
+    return createLogGroup({
+        isSystemGroup: false,
+        pspId: pspId || 'system',
+        pspName: pspName || 'PSP',
+        method: method || 'sdk',
+        amountDisplay: formattedAmount,
+        customerRef: customerRef || '1'
+    });
+}
+
+/**
+ * Updates the status pill and border color of the current payment attempt
+ */
+function updateActiveAttemptStatus(newStatus, extraMeta = '') {
+    if (!activeLogGroup || activeLogGroup.isSystemGroup) return;
+    activeLogGroup.status = newStatus;
+    activeLogGroup.element.classList.remove('status-pending', 'status-success', 'status-error');
+    activeLogGroup.element.classList.add(`status-${newStatus}`);
+
+    if (activeLogGroup.statusPill) {
+        activeLogGroup.statusPill.style.display = 'inline-block';
+        activeLogGroup.statusPill.className = `log-attempt-status-pill ${newStatus}`;
+        activeLogGroup.statusPill.textContent = newStatus === 'success'
+            ? 'SUCCESS'
+            : (newStatus === 'error' ? 'FAILED / DECLINED' : 'IN PROGRESS');
+    }
+
+    if (extraMeta && activeLogGroup.metaSpan && !activeLogGroup.metaText.includes(extraMeta)) {
+        activeLogGroup.metaText += ` • ${extraMeta}`;
+        activeLogGroup.metaSpan.textContent = activeLogGroup.metaText;
+    }
+}
+
+/**
+ * Utility to log messages into our structured console log view
+ */
+function log(message, type = 'system', explicitData = null) {
     const timestamp = new Date().toLocaleTimeString();
+
+    if (!activeLogGroup) {
+        createLogGroup({ isSystemGroup: true });
+    }
+
+    const { category, catClass, cleanText, payload } = parseLogContent(message, explicitData, type);
+
+    // Auto-update attempt status on error or final callback
+    if (!activeLogGroup.isSystemGroup) {
+        if (type === 'error') {
+            updateActiveAttemptStatus('error');
+        } else if (type === 'success' && (
+            category.toUpperCase().includes('CALLBACK') ||
+            cleanText.includes('registered successfully') ||
+            cleanText.includes('Receipt Status') ||
+            cleanText.includes('Final Link') ||
+            category.toUpperCase().includes('RESPONSE')
+        )) {
+            updateActiveAttemptStatus('success');
+        }
+    }
+
+    const entryRecord = {
+        timestamp,
+        type,
+        category,
+        cleanText,
+        payload
+    };
+    activeLogGroup.entries.push(entryRecord);
+
     const entry = document.createElement('div');
     entry.className = `log-entry ${type}`;
-    
+
+    const topRow = document.createElement('div');
+    topRow.className = 'log-entry-top';
+
+    const mainCol = document.createElement('div');
+    mainCol.className = 'log-entry-main';
+
     const timeSpan = document.createElement('span');
     timeSpan.className = 'log-timestamp';
-    timeSpan.textContent = `[${timestamp}]`;
-    
-    entry.appendChild(timeSpan);
-    entry.appendChild(document.createTextNode(` ${message}`));
-    
-    if (logsContainer) {
+    timeSpan.textContent = timestamp;
+
+    const catSpan = document.createElement('span');
+    catSpan.className = `log-category-tag ${catClass}`;
+    catSpan.textContent = category;
+
+    const msgSpan = document.createElement('span');
+    msgSpan.className = 'log-message-text';
+    msgSpan.textContent = cleanText;
+
+    mainCol.appendChild(timeSpan);
+    mainCol.appendChild(catSpan);
+    mainCol.appendChild(msgSpan);
+    topRow.appendChild(mainCol);
+
+    // Individual copy button if entry is a callback, error, response, or has payload
+    const isImportantEntry = payload !== null && payload !== undefined ||
+        type === 'callback' ||
+        type === 'error' ||
+        category.toUpperCase().includes('CALLBACK') ||
+        category.toUpperCase().includes('RESPONSE');
+
+    if (isImportantEntry && payload === null) {
+        const copyEntryBtn = document.createElement('button');
+        copyEntryBtn.type = 'button';
+        copyEntryBtn.className = 'btn-copy-entry';
+        copyEntryBtn.textContent = '📋 Copy';
+        copyEntryBtn.addEventListener('click', () => {
+            const rawText = `[${timestamp}] [${category}] ${cleanText}`;
+            copyTextWithFeedback(rawText, copyEntryBtn, '📋 Copy');
+        });
+        topRow.appendChild(copyEntryBtn);
+    }
+
+    entry.appendChild(topRow);
+
+    // Render pretty JSON / structured payload block if present
+    if (payload !== null && payload !== undefined) {
+        const payloadWrapper = document.createElement('div');
+        payloadWrapper.className = 'log-payload-wrapper';
+
+        const toolbar = document.createElement('div');
+        toolbar.className = 'log-payload-toolbar';
+
+        const labelSpan = document.createElement('span');
+        const isJsonObj = typeof payload === 'object';
+        labelSpan.textContent = isJsonObj ? 'JSON Payload' : 'Payload Data';
+
+        const copyPayloadBtn = document.createElement('button');
+        copyPayloadBtn.type = 'button';
+        copyPayloadBtn.className = 'btn-copy-entry';
+        copyPayloadBtn.textContent = '📋 Copy Payload';
+
+        const formattedString = isJsonObj
+            ? JSON.stringify(payload, null, 2)
+            : String(payload);
+
+        copyPayloadBtn.addEventListener('click', () => {
+            copyTextWithFeedback(formattedString, copyPayloadBtn, '📋 Copy Payload');
+        });
+
+        toolbar.appendChild(labelSpan);
+        toolbar.appendChild(copyPayloadBtn);
+
+        const pre = document.createElement('pre');
+        pre.className = 'log-payload-pre';
+        if (isJsonObj) {
+            pre.innerHTML = syntaxHighlightJson(formattedString);
+        } else {
+            pre.textContent = formattedString;
+        }
+
+        payloadWrapper.appendChild(toolbar);
+        payloadWrapper.appendChild(pre);
+        entry.appendChild(payloadWrapper);
+    }
+
+    if (activeLogGroup && activeLogGroup.bodyEl) {
+        activeLogGroup.bodyEl.appendChild(entry);
+    } else if (logsContainer) {
         logsContainer.appendChild(entry);
+    }
+
+    if (logsContainer) {
         logsContainer.scrollTop = logsContainer.scrollHeight;
     }
 }
@@ -390,13 +827,15 @@ const SUPPORTED_PSPS = {
             if (unmountBtn) unmountBtn.disabled = false;
             
             const errorCallback = (error) => {
-                log(`[Callback] errorCallback fired: ${JSON.stringify(error)}`, 'error');
+                log(`[Callback] errorCallback fired`, 'error', error);
+                updateActiveAttemptStatus('error');
                 console.error('Littlepay SDK Error callback:', error);
             };
             
             const successCallback = (paymentIntentId) => {
-                log(`[Callback] successCallback fired with ID: ${paymentIntentId}`, 'success');
+                log(`[Callback] successCallback fired with Payment Intent ID`, 'success', { payment_intent_id: paymentIntentId });
                 log('[System] Stored Payment Method registered successfully! Card saved.', 'success');
+                updateActiveAttemptStatus('success');
                 
                 cleanupExistingSession();
                 if (unmountBtn) unmountBtn.disabled = true;
@@ -563,7 +1002,8 @@ const SUPPORTED_PSPS = {
                         });
 
                         const resultData = await processRes.json();
-                        log(`[Moneris Vault Response] Status: ${processRes.status}, Body: ${JSON.stringify(resultData)}`, resultData.success ? 'success' : 'error');
+                        log(`[Moneris Vault Response] Status: ${processRes.status}`, resultData.success ? 'success' : 'error', resultData);
+                        updateActiveAttemptStatus(resultData.success ? 'success' : 'error', sessionData.order_no);
 
                         if (!processRes.ok && !resultData.receipt) {
                             throw new Error(resultData.error || `HTTP ${processRes.status}`);
@@ -641,35 +1081,38 @@ const SUPPORTED_PSPS = {
             });
 
             monerisCheckoutInstance.setCallback('error_event', (err) => {
-                log(`[Moneris Callback] Error: ${JSON.stringify(err)}`, 'error');
+                log(`[Moneris Callback] Error event received`, 'error', err);
+                updateActiveAttemptStatus('error');
             });
 
             let receiptHandled = false;
             const handleMonerisSuccess = async (eventName, callbackData) => {
-                log(`[Moneris Callback] ${eventName}: ${typeof callbackData === 'string' ? callbackData : JSON.stringify(callbackData)}`, 'success');
-                if (receiptHandled) {
-                    return;
-                }
-                receiptHandled = true;
-
                 let parsed = {};
                 try {
                     parsed = typeof callbackData === 'string' ? JSON.parse(callbackData) : callbackData;
                 } catch (e) {
                     parsed = { raw: callbackData };
                 }
+                log(`[Moneris Callback] ${eventName}`, 'callback', parsed);
+                if (receiptHandled) {
+                    return;
+                }
+                receiptHandled = true;
 
                 // Verify Receipt server-to-server
-                log('[Proxy Moneris] Verifying transaction receipt via /api/moneris-receipt...', 'system');
+                const receiptReqBody = {
+                    ticket: (parsed.response && parsed.response.ticket) || parsed.ticket || sessionData.ticket
+                };
+                log('[Proxy Moneris] Verifying transaction receipt via POST /api/moneris-receipt...', 'system');
                 try {
-                    const ticketToVerify = (parsed.response && parsed.response.ticket) || parsed.ticket || sessionData.ticket;
+                    const ticketToVerify = receiptReqBody.ticket;
                     const receiptRes = await fetch('/api/moneris-receipt', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ ticket: ticketToVerify })
                     });
                     const receiptData = await receiptRes.json();
-                    log(`[Proxy Moneris] Receipt Status: ${JSON.stringify(receiptData.response ? receiptData.response.receipt : receiptData)}`, 'success');
+                    log(`[Proxy Moneris] Receipt Status verified`, 'success', receiptData.response ? receiptData.response.receipt : receiptData);
 
                     const rawReceipt = receiptData?.response?.receipt || {};
                     const ccReceipt = rawReceipt.cc || rawReceipt;
@@ -693,6 +1136,7 @@ const SUPPORTED_PSPS = {
                     let subtitle = '';
 
                     if (isApproved) {
+                        updateActiveAttemptStatus('success', sessionData.order_no);
                         if (isZeroDollar && hasToken) {
                             title = 'Card Successfully Verified & Saved!';
                             subtitle = 'Zero-dollar authorization approved and card securely tokenized.';
@@ -704,6 +1148,7 @@ const SUPPORTED_PSPS = {
                             subtitle = amount ? `Payment of $${amount} CAD was successfully approved.` : 'Payment was successfully approved.';
                         }
                     } else {
+                        updateActiveAttemptStatus('error', sessionData.order_no);
                         title = 'Moneris Payment Declined';
                         subtitle = gatewayMessage ? `Gateway response: ${gatewayMessage}` : 'The transaction was declined by Moneris.';
                     }
@@ -971,6 +1416,8 @@ async function createCheckoutSession() {
         }
     };
 
+    log(`[Proxy API] POST /api/create-session (${psp.name} - ${checkoutMethod.toUpperCase()})`, 'system', payload);
+
     try {
         const proxyResponse = await fetch('/api/create-session', {
             method: 'POST',
@@ -992,12 +1439,16 @@ async function createCheckoutSession() {
         }
 
         const sessionData = await proxyResponse.json();
-        log(`[Proxy API] Session successfully registered via secure local backend proxy for PSP [${psp.name.toUpperCase()}]!`, 'success');
+        log(`[Proxy API] Session created for [${psp.name.toUpperCase()}]`, 'success', sessionData);
+        if (sessionData.order_no || sessionData.id) {
+            updateActiveAttemptStatus('pending', sessionData.order_no || sessionData.id);
+        }
         
         return sessionData;
 
     } catch (err) {
         log(`[Proxy API Error] Local proxy server request failed: ${err.message}`, 'error');
+        updateActiveAttemptStatus('error');
         throw err;
     }
 }
@@ -1014,6 +1465,22 @@ async function initializeSdkFlow(e) {
     submitBtn.textContent = 'Preparing Session...';
 
     cleanupExistingSession();
+
+    const psp = getSelectedPsp();
+    const rawAmount = parseInt(orderAmountInput ? orderAmountInput.value.trim() : '811', 10);
+    const amount = Number.isInteger(rawAmount) ? rawAmount : 811;
+    const currency = (orderCurrencyInput && orderCurrencyInput.value.trim()) || psp.defaultCurrency;
+    const checkoutMethod = checkoutMethodSelect ? checkoutMethodSelect.value : psp.defaultMethod;
+    const customerRef = (customerRefInput && customerRefInput.value.trim()) || '1';
+
+    startPaymentAttemptLog({
+        pspId: psp.id,
+        pspName: psp.name,
+        method: checkoutMethod,
+        amount: amount,
+        currency: currency,
+        customerRef: customerRef
+    });
 
     try {
         sessionData = await createCheckoutSession();
@@ -1196,12 +1663,67 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
+    // Logs Toolbar Actions: Clear, Copy All, Expand Height, Fullscreen Modal
     if (clearLogsBtn) {
         clearLogsBtn.addEventListener('click', () => {
             if (logsContainer) logsContainer.innerHTML = '';
+            allLogGroups.length = 0;
+            activeLogGroup = null;
+            logAttemptCounter = 0;
+            updateLogsCountBadge();
             log('[System] Logs cleared.', 'system');
         });
     }
+
+    if (copyAllLogsBtn) {
+        copyAllLogsBtn.addEventListener('click', () => {
+            if (allLogGroups.length === 0) return;
+            const fullText = allLogGroups.map(g => formatGroupForClipboard(g)).join('\n\n' + '='.repeat(60) + '\n\n');
+            copyTextWithFeedback(fullText, copyAllLogsBtn, '📋 Copy All', '✅ All Copied!');
+        });
+    }
+
+    if (expandLogsBtn && logsContainer) {
+        expandLogsBtn.addEventListener('click', () => {
+            logsContainer.style.height = ''; // Reset manual drag height if any
+            const isExpanded = logsContainer.classList.toggle('logs-expanded');
+            expandLogsBtn.classList.toggle('active', isExpanded);
+            expandLogsBtn.textContent = isExpanded ? '↕️ Default Size' : '↕️ Taller';
+        });
+    }
+
+    let logsBackdrop = document.querySelector('.logs-backdrop');
+    if (!logsBackdrop) {
+        logsBackdrop = document.createElement('div');
+        logsBackdrop.className = 'logs-backdrop';
+        document.body.appendChild(logsBackdrop);
+    }
+
+    const toggleFullscreenLogs = (forceState) => {
+        if (!logsCard) return;
+        const willBeFullscreen = typeof forceState === 'boolean'
+            ? forceState
+            : !logsCard.classList.contains('logs-fullscreen');
+
+        logsCard.classList.toggle('logs-fullscreen', willBeFullscreen);
+        if (logsBackdrop) logsBackdrop.classList.toggle('active', willBeFullscreen);
+        if (fullscreenLogsBtn) {
+            fullscreenLogsBtn.classList.toggle('active', willBeFullscreen);
+            fullscreenLogsBtn.textContent = willBeFullscreen ? '✕ Exit Fullscreen' : '⛶ Maximize';
+        }
+    };
+
+    if (fullscreenLogsBtn) {
+        fullscreenLogsBtn.addEventListener('click', () => toggleFullscreenLogs());
+    }
+    if (logsBackdrop) {
+        logsBackdrop.addEventListener('click', () => toggleFullscreenLogs(false));
+    }
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && logsCard && logsCard.classList.contains('logs-fullscreen')) {
+            toggleFullscreenLogs(false);
+        }
+    });
     
     log('[System] Demo playground ready. Configure theme or input a token to start.', 'system');
 });

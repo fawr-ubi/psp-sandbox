@@ -287,14 +287,20 @@
             </div>
 
             <!-- Activity Logs Section -->
-            <div class="card logs-card">
+            <div class="card logs-card" id="logs-card">
                 <div class="logs-header">
-                    <h3 class="section-title text-sm">Real-time SDK Event Logs</h3>
-                    <button id="btn-clear-logs" class="btn-text">Clear Logs</button>
+                    <div class="logs-title-group">
+                        <h3 class="section-title text-sm">Real-time SDK & Gateway Logs</h3>
+                        <span class="logs-count-badge" id="logs-count-badge">0 attempts</span>
+                    </div>
+                    <div class="logs-actions">
+                        <button type="button" id="btn-copy-all-logs" class="btn-log-action" title="Copy all logs to clipboard">📋 Copy All</button>
+                        <button type="button" id="btn-expand-logs" class="btn-log-action" title="Expand / Increase height">↕️ Taller</button>
+                        <button type="button" id="btn-fullscreen-logs" class="btn-log-action" title="Toggle fullscreen modal view">⛶ Maximize</button>
+                        <button type="button" id="btn-clear-logs" class="btn-log-action btn-log-danger" title="Clear all logs">🗑️ Clear</button>
+                    </div>
                 </div>
-                <div id="logs-container" class="logs-container">
-                    <div class="log-entry system"><span class="log-timestamp">[12:00:00]</span> [System] Ready to initialize. Waiting for your Client Token...</div>
-                </div>
+                <div id="logs-container" class="logs-container"></div>
             </div>
         </section>
     </main>
@@ -309,6 +315,6 @@
     <script src="https://static.checkout.sandbox.littlepay.com/littlepay-checkout-v2.min.js"></script>
     <!-- Moneris Checkout JS SDK Sandbox -->
     <script src="https://gatewayt.moneris.com/chktv2/js/chkt_v2.00.js"></script>
-    <script src="app.js?v=4"></script>
+    <script src="app.js?v=5"></script>
 </body>
 </html>

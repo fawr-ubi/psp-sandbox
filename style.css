@@ -443,47 +443,438 @@ input[type="color"]::-webkit-color-swatch {
     margin-top: 24px;
     padding: 16px;
     background-color: #fafbfc;
+    transition: all 0.25s ease;
+}
+
+.logs-card.logs-fullscreen {
+    position: fixed;
+    inset: 20px;
+    margin: 0;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    border: 1px solid #4a5568;
+    background-color: #111622;
+    color: #e2e8f0;
+}
+
+.logs-card.logs-fullscreen .section-title {
+    color: #f7fafc;
+}
+
+.logs-card.logs-fullscreen .logs-header {
+    border-bottom-color: #2d3748;
+}
+
+.logs-card.logs-fullscreen .logs-container {
+    max-height: none !important;
+    height: 100% !important;
+    flex-grow: 1;
+    resize: none;
+}
+
+.logs-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.65);
+    backdrop-filter: blur(3px);
+    z-index: 9998;
+    display: none;
+}
+
+.logs-backdrop.active {
+    display: block;
 }
 
 .logs-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
     margin-bottom: 12px;
     border-bottom: 1px solid var(--border-color);
-    padding-bottom: 8px;
+    padding-bottom: 10px;
+}
+
+.logs-title-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.logs-count-badge {
+    background-color: #edf2f7;
+    color: #4a5568;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-family: var(--font-mono);
+}
+
+.logs-card.logs-fullscreen .logs-count-badge {
+    background-color: #2d3748;
+    color: #cbd5e0;
+}
+
+.logs-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.btn-log-action {
+    background-color: #ffffff;
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    font-family: var(--font-sans);
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.btn-log-action:hover {
+    background-color: #edf2f7;
+    border-color: #cbd5e0;
+}
+
+.btn-log-action.active {
+    background-color: var(--primary-light);
+    border-color: var(--primary);
+    color: var(--primary-dark);
+}
+
+.btn-log-danger:hover {
+    background-color: var(--error-light);
+    border-color: #feb2b2;
+    color: var(--error);
+}
+
+.logs-card.logs-fullscreen .btn-log-action {
+    background-color: #2d3748;
+    border-color: #4a5568;
+    color: #e2e8f0;
+}
+
+.logs-card.logs-fullscreen .btn-log-action:hover {
+    background-color: #4a5568;
 }
 
 .logs-container {
-    background-color: var(--dark-bg);
+    background-color: #0f172a;
     color: #cbd5e0;
     font-family: var(--font-mono);
-    font-size: 0.75rem;
+    font-size: 0.78rem;
     padding: 12px;
     border-radius: var(--radius-md);
-    max-height: 180px;
+    height: 280px;
+    min-height: 180px;
+    max-height: 85vh;
+    resize: vertical;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.15);
+    gap: 10px;
+    box-shadow: inset 0 2px 6px rgba(0,0,0,0.3);
+    transition: height 0.2s ease;
 }
 
+.logs-container.logs-expanded {
+    height: 600px;
+}
+
+/* Payment Attempt Group Card inside Logs */
+.log-attempt-group {
+    border: 1px solid #1e293b;
+    background-color: #162032;
+    border-radius: var(--radius-md);
+    overflow: visible;
+    transition: border-color 0.2s ease;
+}
+
+.log-attempt-group.active-attempt {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25);
+}
+
+.log-attempt-group.status-success {
+    border-left: 3px solid #48bb78;
+}
+
+.log-attempt-group.status-error {
+    border-left: 3px solid #f56565;
+}
+
+.log-attempt-group.status-pending {
+    border-left: 3px solid #ed8936;
+}
+
+.log-attempt-group.status-system {
+    border-left: 3px solid #64748b;
+}
+
+.log-attempt-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background-color: #1e293b;
+    cursor: pointer;
+    user-select: none;
+    gap: 8px;
+    flex-wrap: wrap;
+    border-top-left-radius: calc(var(--radius-md) - 1px);
+    border-top-right-radius: calc(var(--radius-md) - 1px);
+}
+
+.log-attempt-header:hover {
+    background-color: #263349;
+}
+
+.log-attempt-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 0.76rem;
+}
+
+.log-attempt-toggle {
+    color: #94a3b8;
+    font-size: 0.7rem;
+    transition: transform 0.2s ease;
+    display: inline-block;
+}
+
+.log-attempt-group.collapsed .log-attempt-toggle {
+    transform: rotate(-90deg);
+}
+
+.log-attempt-group.collapsed .log-attempt-body {
+    display: none;
+}
+
+.log-attempt-group.collapsed .log-attempt-header {
+    border-bottom-left-radius: calc(var(--radius-md) - 1px);
+    border-bottom-right-radius: calc(var(--radius-md) - 1px);
+}
+
+.log-attempt-badge {
+    font-weight: 700;
+    font-size: 0.68rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.log-attempt-badge.psp-littlepay {
+    background-color: rgba(237, 118, 37, 0.2);
+    color: #fbd38d;
+    border: 1px solid rgba(237, 118, 37, 0.4);
+}
+
+.log-attempt-badge.psp-moneris {
+    background-color: rgba(56, 178, 172, 0.2);
+    color: #81e6d9;
+    border: 1px solid rgba(56, 178, 172, 0.4);
+}
+
+.log-attempt-badge.psp-system {
+    background-color: rgba(148, 163, 184, 0.15);
+    color: #cbd5e1;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.log-attempt-title {
+    color: #f8fafc;
+    font-weight: 600;
+}
+
+.log-attempt-meta {
+    color: #94a3b8;
+    font-size: 0.72rem;
+}
+
+.log-attempt-status-pill {
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 10px;
+    text-transform: uppercase;
+}
+
+.log-attempt-status-pill.pending {
+    background-color: rgba(237, 137, 54, 0.2);
+    color: #fbd38d;
+}
+
+.log-attempt-status-pill.success {
+    background-color: rgba(72, 187, 120, 0.2);
+    color: #68d391;
+}
+
+.log-attempt-status-pill.error {
+    background-color: rgba(245, 101, 101, 0.2);
+    color: #fc8181;
+}
+
+.log-attempt-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.btn-copy-attempt,
+.btn-copy-entry {
+    background-color: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: #cbd5e1;
+    font-family: var(--font-sans);
+    font-size: 0.68rem;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.btn-copy-attempt:hover,
+.btn-copy-entry:hover {
+    background-color: rgba(255, 255, 255, 0.16);
+    color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.btn-copy-attempt.copied,
+.btn-copy-entry.copied {
+    background-color: rgba(72, 187, 120, 0.25);
+    border-color: #48bb78;
+    color: #68d391;
+}
+
+.log-attempt-body {
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Individual Log Entry */
 .log-entry {
-    line-height: 1.4;
-    word-break: break-all;
-    white-space: pre-wrap;
+    line-height: 1.45;
+    word-break: break-word;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background-color: rgba(15, 23, 42, 0.55);
+    border-left: 2px solid transparent;
+    position: relative;
+}
+
+.log-entry:hover {
+    background-color: rgba(15, 23, 42, 0.85);
+}
+
+.log-entry-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.log-entry-main {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex: 1;
 }
 
 .log-timestamp {
-    color: #718096;
-    margin-right: 4px;
+    color: #64748b;
+    font-size: 0.7rem;
+    flex-shrink: 0;
 }
 
-.log-entry.system { color: #63b3ed; }
-.log-entry.success { color: #68d391; }
-.log-entry.error { color: #fc8181; }
-.log-entry.callback { color: #fbd38d; }
+.log-category-tag {
+    font-size: 0.66rem;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    flex-shrink: 0;
+}
+
+.log-category-tag.cat-system { background: rgba(100, 116, 139, 0.25); color: #94a3b8; }
+.log-category-tag.cat-api { background: rgba(59, 130, 246, 0.22); color: #93c5fd; }
+.log-category-tag.cat-callback { background: rgba(245, 158, 11, 0.22); color: #fcd34d; }
+.log-category-tag.cat-vault { background: rgba(168, 85, 247, 0.22); color: #d8b4fe; }
+.log-category-tag.cat-error { background: rgba(239, 68, 68, 0.25); color: #fca5a5; }
+.log-category-tag.cat-success { background: rgba(16, 185, 129, 0.22); color: #6ee7b7; }
+
+.log-message-text {
+    color: #e2e8f0;
+    white-space: pre-wrap;
+}
+
+.log-entry.system { border-left-color: #63b3ed; }
+.log-entry.success { border-left-color: #48bb78; }
+.log-entry.success .log-message-text { color: #9ae6b4; }
+.log-entry.error { border-left-color: #f56565; background-color: rgba(229, 62, 62, 0.08); }
+.log-entry.error .log-message-text { color: #feb2b2; }
+.log-entry.callback { border-left-color: #ecc94b; background-color: rgba(236, 201, 75, 0.06); }
+.log-entry.callback .log-message-text { color: #fef08a; }
+
+/* Formatted JSON / Payload Block inside a log entry */
+.log-payload-wrapper {
+    margin-top: 6px;
+    background-color: #090d16;
+    border: 1px solid #1e293b;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.log-payload-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 8px;
+    background-color: #111827;
+    border-bottom: 1px solid #1e293b;
+    font-size: 0.66rem;
+    color: #64748b;
+}
+
+.log-payload-pre {
+    padding: 8px 10px;
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    line-height: 1.4;
+    color: #cbd5e1;
+    overflow-x: auto;
+    white-space: pre;
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+/* JSON Syntax Highlighting */
+.json-key { color: #7dd3fc; }
+.json-string { color: #86efac; }
+.json-number { color: #f9a8d4; }
+.json-boolean { color: #fcd34d; font-weight: 600; }
+.json-null { color: #94a3b8; font-style: italic; }
 
 /* Custom scrollbar for logs */
 .logs-container::-webkit-scrollbar {
