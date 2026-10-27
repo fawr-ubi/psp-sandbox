@@ -64,15 +64,17 @@ function makeHttpsRequest(urlStr, method, headers, requestBody) {
             }
             console.log(`------------------------------------------------------------\n`);
 
+            const reqHeaders = { ...headers };
+            if (requestBody !== undefined && requestBody !== null) {
+                reqHeaders['Content-Length'] = Buffer.byteLength(requestBody);
+            }
+
             const options = {
                 hostname: parsedUrl.hostname,
                 port: 443,
                 path: parsedUrl.pathname + parsedUrl.search,
                 method: method,
-                headers: {
-                    ...headers,
-                    'Content-Length': Buffer.byteLength(requestBody)
-                }
+                headers: reqHeaders
             };
 
             const req = https.request(options, (res) => {
@@ -100,7 +102,9 @@ function makeHttpsRequest(urlStr, method, headers, requestBody) {
                 reject(err);
             });
 
-            req.write(requestBody);
+            if (requestBody !== undefined && requestBody !== null) {
+                req.write(requestBody);
+            }
             req.end();
         } catch (err) {
             reject(err);
@@ -249,11 +253,36 @@ async function handleMonerisSession(sessionParams, res) {
 }
 
 /**
+ * Decodes Littlepay client_token (Base64 JSON + embedded JWT payload)
+ */
+function decodeLittlepayClientToken(clientToken) {
+    if (!clientToken || typeof clientToken !== 'string') return null;
+    try {
+        const decodedJson = JSON.parse(Buffer.from(clientToken, 'base64').toString('utf8'));
+        let jwtClaims = null;
+        if (decodedJson.auth_token && typeof decodedJson.auth_token === 'string') {
+            const parts = decodedJson.auth_token.split('.');
+            if (parts.length >= 2) {
+                jwtClaims = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+            }
+        }
+        return {
+            https_api: decodedJson.https_api,
+            auth_token: decodedJson.auth_token,
+            jwt_claims: jwtClaims
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
  * Littlepay Session Creation Handler (Inline SDK or Hosted Payment Link)
  */
 async function handleLittlepaySession(sessionParams, res) {
     const { mitType, orderPayload, checkoutMethod, disableSavedCards, locale } = sessionParams;
     const apiKey = process.env.LITTLEPAY_API_KEY;
+    const apiSteps = [];
 
     if (!apiKey) {
         sendJsonResponse(res, 400, {
@@ -284,6 +313,15 @@ async function handleLittlepaySession(sessionParams, res) {
     const orderData = JSON.parse(orderRes.body);
     const paymentIntentId = orderData.payment_intent_id;
     const orderId = orderData.id;
+    const decodedToken = decodeLittlepayClientToken(orderData.client_token);
+    apiSteps.push({
+        step: 1,
+        name: 'POST /merchant/v1/orders',
+        statusCode: orderRes.statusCode,
+        request: orderPayload,
+        response: orderData,
+        decodedClientToken: decodedToken ? { https_api: decodedToken.https_api, jwt_claims: decodedToken.jwt_claims } : null
+    });
     console.log(`[Proxy Littlepay] Order created successfully! ID: ${orderId}, Intent: ${paymentIntentId}`);
 
     if (checkoutMethod === 'link') {
@@ -300,6 +338,16 @@ async function handleLittlepaySession(sessionParams, res) {
             },
             JSON.stringify({ capture_method: 'AUTO' })
         );
+
+        let captureBody = captureRes.body;
+        try { captureBody = captureRes.body ? JSON.parse(captureRes.body) : { status: '204 No Content' }; } catch (e) {}
+        apiSteps.push({
+            step: 2,
+            name: `PATCH /merchant/v1/payment-intents/${paymentIntentId}`,
+            statusCode: captureRes.statusCode,
+            request: { capture_method: 'AUTO' },
+            response: captureBody
+        });
 
         if (captureRes.statusCode < 200 || captureRes.statusCode >= 300) {
             console.error(`[Proxy Littlepay] PATCH Capture failed with status ${captureRes.statusCode}:`, captureRes.body);
@@ -319,6 +367,16 @@ async function handleLittlepaySession(sessionParams, res) {
                 },
                 JSON.stringify({ mit_type: mitType })
             );
+
+            let optionsBody = optionsRes.body;
+            try { optionsBody = optionsRes.body ? JSON.parse(optionsRes.body) : { status: '204 No Content' }; } catch (e) {}
+            apiSteps.push({
+                step: 3,
+                name: `PUT /merchant/v1/payment-intents/${paymentIntentId}/payment-method-options`,
+                statusCode: optionsRes.statusCode,
+                request: { mit_type: mitType },
+                response: optionsBody
+            });
 
             if (optionsRes.statusCode < 200 || optionsRes.statusCode >= 300) {
                 console.error(`[Proxy Littlepay] Setting MIT options failed with status ${optionsRes.statusCode}:`, optionsRes.body);
@@ -357,6 +415,13 @@ async function handleLittlepaySession(sessionParams, res) {
         }
 
         const linkData = JSON.parse(linkRes.body);
+        apiSteps.push({
+            step: 4,
+            name: `POST /merchant/v1/orders/${orderId}/payment-links`,
+            statusCode: linkRes.statusCode,
+            request: linkPayload,
+            response: linkData
+        });
         let finalLinkUrl = linkData.url || linkData.payment_link || linkData.payment_link_url;
 
         if (finalLinkUrl) {
@@ -376,7 +441,11 @@ async function handleLittlepaySession(sessionParams, res) {
             url: finalLinkUrl,
             id: orderId,
             payment_intent_id: paymentIntentId,
-            linkData: linkData
+            client_token: orderData.client_token,
+            customer_ref: orderPayload.customer_ref,
+            mit_type: mitType || null,
+            linkData: linkData,
+            apiSteps: apiSteps
         }, 'handleLittlepaySession (Hosted Link)');
 
     } else {
@@ -393,6 +462,16 @@ async function handleLittlepaySession(sessionParams, res) {
                 },
                 JSON.stringify({ mit_type: mitType })
             );
+
+            let optionsBody = optionsRes.body;
+            try { optionsBody = optionsRes.body ? JSON.parse(optionsRes.body) : { status: '204 No Content' }; } catch (e) {}
+            apiSteps.push({
+                step: 2,
+                name: `PUT /merchant/v1/payment-intents/${paymentIntentId}/payment-method-options`,
+                statusCode: optionsRes.statusCode,
+                request: { mit_type: mitType },
+                response: optionsBody
+            });
 
             if (optionsRes.statusCode < 200 || optionsRes.statusCode >= 300) {
                 console.error(`[Proxy Littlepay] Setting MIT options failed with status ${optionsRes.statusCode}:`, optionsRes.body);
@@ -411,7 +490,10 @@ async function handleLittlepaySession(sessionParams, res) {
             checkoutMethod: 'sdk',
             client_token: orderData.client_token,
             payment_intent_id: paymentIntentId,
-            id: orderId
+            id: orderId,
+            customer_ref: orderPayload.customer_ref,
+            mit_type: mitType || null,
+            apiSteps: apiSteps
         }, 'handleLittlepaySession (Inline SDK)');
     }
 }
@@ -464,6 +546,144 @@ const server = http.createServer((req, res) => {
             } catch (err) {
                 console.error('[Proxy Error] Core failure:', err);
                 sendJsonResponse(res, 500, { error: `Local proxy core failure: ${err.message}` }, 'POST /api/create-session Error');
+            }
+        });
+        return;
+    }
+
+    // Route: Littlepay Receipt / Payment Intent & Stored Payment Methods Inspection Endpoint
+    if (req.method === 'POST' && pathname === '/api/littlepay-receipt') {
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk;
+        });
+
+        req.on('end', async () => {
+            console.log(`\n============================================================`);
+            console.log(`[Incoming Request] POST /api/littlepay-receipt`);
+            console.log(`[Request Payload]:\n${body}`);
+            console.log(`============================================================\n`);
+
+            try {
+                const {
+                    client_token,
+                    order_id,
+                    payment_intent_id,
+                    customer_ref,
+                    amount = 0,
+                    currency = 'EUR',
+                    metadata = {}
+                } = JSON.parse(body);
+
+                let decoded = decodeLittlepayClientToken(client_token);
+
+                // Fallback: if client_token was not supplied, generate a temporary 0-amount order to obtain customer auth_token
+                if ((!decoded || !decoded.auth_token) && customer_ref && process.env.LITTLEPAY_API_KEY) {
+                    const tempOrderRes = await makeHttpsRequest(
+                        'https://checkout.sandbox.littlepay.com/merchant/v1/orders',
+                        'POST',
+                        {
+                            'Content-Type': 'application/json',
+                            'X-Api-Key': process.env.LITTLEPAY_API_KEY
+                        },
+                        JSON.stringify({
+                            customer_ref: customer_ref,
+                            charge: { amount: 0, currency: currency || 'EUR' }
+                        })
+                    );
+                    if (tempOrderRes.statusCode >= 200 && tempOrderRes.statusCode < 300) {
+                        const tempOrderData = JSON.parse(tempOrderRes.body);
+                        decoded = decodeLittlepayClientToken(tempOrderData.client_token);
+                    }
+                }
+
+                if (!decoded || !decoded.auth_token) {
+                    sendJsonResponse(res, 400, {
+                        error: 'Unable to decode Littlepay client_token or retrieve customer auth_token.'
+                    }, 'POST /api/littlepay-receipt Error');
+                    return;
+                }
+
+                const httpsApi = (decoded.https_api || 'https://checkout.sandbox.littlepay.com/customer/v1').replace(/\/$/, '');
+                const authHeaders = {
+                    'Accept': 'application/json',
+                    'Authorization': `Bearer ${decoded.auth_token}`
+                };
+
+                const intentId = payment_intent_id || (decoded.jwt_claims && decoded.jwt_claims.payment_intent_id);
+                let paymentIntent = null;
+                if (intentId) {
+                    const piRes = await makeHttpsRequest(
+                        `${httpsApi}/payment-intents/${intentId}`,
+                        'GET',
+                        authHeaders
+                    );
+                    try {
+                        paymentIntent = JSON.parse(piRes.body);
+                    } catch (e) {
+                        paymentIntent = { statusCode: piRes.statusCode, rawBody: piRes.body };
+                    }
+                }
+
+                let storedPaymentMethods = [];
+                const spmListRes = await makeHttpsRequest(
+                    `${httpsApi}/stored-payment-methods`,
+                    'GET',
+                    authHeaders
+                );
+                try {
+                    const parsedSpm = JSON.parse(spmListRes.body);
+                    if (Array.isArray(parsedSpm)) {
+                        storedPaymentMethods = parsedSpm;
+                    }
+                } catch (e) {
+                    storedPaymentMethods = [];
+                }
+
+                // Sort by created_at descending to identify the most recently registered card
+                const sortedMethods = [...storedPaymentMethods].sort((a, b) => {
+                    return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+                });
+                const latestStoredPaymentMethod = sortedMethods[0] || null;
+
+                let latestStoredPaymentMethodDetail = null;
+                if (latestStoredPaymentMethod && latestStoredPaymentMethod.id) {
+                    const spmDetailRes = await makeHttpsRequest(
+                        `${httpsApi}/stored-payment-methods/${latestStoredPaymentMethod.id}`,
+                        'GET',
+                        authHeaders
+                    );
+                    try {
+                        latestStoredPaymentMethodDetail = JSON.parse(spmDetailRes.body);
+                    } catch (e) {
+                        latestStoredPaymentMethodDetail = null;
+                    }
+                }
+
+                const cardMask = (latestStoredPaymentMethod && latestStoredPaymentMethod.card_mask)
+                    || (latestStoredPaymentMethodDetail && latestStoredPaymentMethodDetail.card_mask)
+                    || null;
+                const formattedMaskedPan = cardMask && String(cardMask).trim().length >= 4
+                    ? '*'.repeat(12) + String(cardMask).trim().slice(-4)
+                    : 'SAVED_CARD';
+
+                sendJsonResponse(res, 200, {
+                    order_id: order_id || (decoded.jwt_claims && decoded.jwt_claims.order_id) || null,
+                    payment_intent_id: intentId || null,
+                    customer_ref: customer_ref || (decoded.jwt_claims && decoded.jwt_claims.customer_id) || null,
+                    amount: amount,
+                    currency: currency,
+                    metadata: metadata,
+                    paymentIntent: paymentIntent,
+                    storedPaymentMethods: storedPaymentMethods,
+                    latestStoredPaymentMethod: latestStoredPaymentMethod,
+                    latestStoredPaymentMethodDetail: latestStoredPaymentMethodDetail,
+                    formattedMaskedPan: formattedMaskedPan
+                }, 'POST /api/littlepay-receipt');
+
+            } catch (err) {
+                console.error('[Proxy Littlepay Error] Receipt inspection error:', err);
+                sendJsonResponse(res, 500, { error: err.message }, 'POST /api/littlepay-receipt Error');
             }
         });
         return;
