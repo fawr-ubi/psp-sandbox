@@ -82,6 +82,48 @@ function escapeHtml(str) {
 }
 
 /**
+ * Compacts long unbroken token strings (e.g. JWTs, access_token, client_token) for visual log display
+ * while preserving full values when copying to clipboard.
+ */
+function compactTokenString(str, maxTokenLen = 68) {
+    if (typeof str !== 'string' || str.length <= maxTokenLen) {
+        return { value: str, compacted: false };
+    }
+    let didCompact = false;
+    const replaced = str.replace(/\S{68,}/g, (token) => {
+        didCompact = true;
+        return `${token.slice(0, 28)}…[${token.length} chars]…${token.slice(-14)}`;
+    });
+    return { value: replaced, compacted: didCompact };
+}
+
+function compactPayloadForDisplay(value, maxTokenLen = 68) {
+    if (typeof value === 'string') {
+        return compactTokenString(value, maxTokenLen);
+    }
+    if (Array.isArray(value)) {
+        let anyCompacted = false;
+        const arr = value.map((item) => {
+            const res = compactPayloadForDisplay(item, maxTokenLen);
+            if (res.compacted) anyCompacted = true;
+            return res.value;
+        });
+        return { value: arr, compacted: anyCompacted };
+    }
+    if (value && typeof value === 'object') {
+        let anyCompacted = false;
+        const out = {};
+        for (const [k, v] of Object.entries(value)) {
+            const res = compactPayloadForDisplay(v, maxTokenLen);
+            if (res.compacted) anyCompacted = true;
+            out[k] = res.value;
+        }
+        return { value: out, compacted: anyCompacted };
+    }
+    return { value, compacted: false };
+}
+
+/**
  * Syntax highlights a formatted JSON string for dark console display
  */
 function syntaxHighlightJson(jsonStr) {
@@ -439,7 +481,11 @@ function log(message, type = 'system', explicitData = null) {
 
     const msgSpan = document.createElement('span');
     msgSpan.className = 'log-message-text';
-    msgSpan.textContent = cleanText;
+    const compactedMsg = compactTokenString(cleanText, 68);
+    msgSpan.textContent = compactedMsg.value;
+    if (compactedMsg.compacted) {
+        msgSpan.title = cleanText;
+    }
 
     mainCol.appendChild(timeSpan);
     mainCol.appendChild(catSpan);
@@ -477,31 +523,65 @@ function log(message, type = 'system', explicitData = null) {
 
         const labelSpan = document.createElement('span');
         const isJsonObj = typeof payload === 'object';
-        labelSpan.textContent = isJsonObj ? 'JSON Payload' : 'Payload Data';
+
+        const formattedString = isJsonObj
+            ? JSON.stringify(payload, null, 2)
+            : String(payload);
+
+        const compactedPayloadRes = compactPayloadForDisplay(payload, 68);
+        const compactedFormattedString = isJsonObj
+            ? JSON.stringify(compactedPayloadRes.value, null, 2)
+            : String(compactedPayloadRes.value);
+
+        labelSpan.textContent = isJsonObj
+            ? (compactedPayloadRes.compacted ? 'JSON Payload (tokens compacted)' : 'JSON Payload')
+            : 'Payload Data';
+
+        const toolbarActions = document.createElement('div');
+        toolbarActions.className = 'log-payload-toolbar-actions';
+
+        const pre = document.createElement('pre');
+        pre.className = 'log-payload-pre';
+
+        const renderPreContent = (strToRender) => {
+            if (isJsonObj) {
+                pre.innerHTML = syntaxHighlightJson(strToRender);
+            } else {
+                pre.textContent = strToRender;
+            }
+        };
+
+        renderPreContent(compactedFormattedString);
+
+        if (compactedPayloadRes.compacted) {
+            let isExpanded = false;
+            const toggleTokensBtn = document.createElement('button');
+            toggleTokensBtn.type = 'button';
+            toggleTokensBtn.className = 'btn-copy-entry';
+            toggleTokensBtn.textContent = '🔍 Expand Tokens';
+            toggleTokensBtn.addEventListener('click', () => {
+                isExpanded = !isExpanded;
+                renderPreContent(isExpanded ? formattedString : compactedFormattedString);
+                toggleTokensBtn.textContent = isExpanded ? '🔽 Compact Tokens' : '🔍 Expand Tokens';
+                labelSpan.textContent = isJsonObj
+                    ? (isExpanded ? 'JSON Payload (full tokens)' : 'JSON Payload (tokens compacted)')
+                    : 'Payload Data';
+            });
+            toolbarActions.appendChild(toggleTokensBtn);
+        }
 
         const copyPayloadBtn = document.createElement('button');
         copyPayloadBtn.type = 'button';
         copyPayloadBtn.className = 'btn-copy-entry';
         copyPayloadBtn.textContent = '📋 Copy Payload';
 
-        const formattedString = isJsonObj
-            ? JSON.stringify(payload, null, 2)
-            : String(payload);
-
         copyPayloadBtn.addEventListener('click', () => {
             copyTextWithFeedback(formattedString, copyPayloadBtn, '📋 Copy Payload');
         });
 
+        toolbarActions.appendChild(copyPayloadBtn);
         toolbar.appendChild(labelSpan);
-        toolbar.appendChild(copyPayloadBtn);
-
-        const pre = document.createElement('pre');
-        pre.className = 'log-payload-pre';
-        if (isJsonObj) {
-            pre.innerHTML = syntaxHighlightJson(formattedString);
-        } else {
-            pre.textContent = formattedString;
-        }
+        toolbar.appendChild(toolbarActions);
 
         payloadWrapper.appendChild(toolbar);
         payloadWrapper.appendChild(pre);
@@ -637,6 +717,194 @@ function setupColorPickers() {
 }
 
 /**
+ * Reads all key-value metadata fields from the DOM
+ */
+function getMetadataMap() {
+    const metadata = {};
+    const metadataContainer = document.getElementById('metadata-rows-container');
+    if (metadataContainer) {
+        const keyInputs = metadataContainer.querySelectorAll('.metadata-key');
+        const valueInputs = metadataContainer.querySelectorAll('.metadata-value');
+        keyInputs.forEach((keyInput, index) => {
+            const key = keyInput.value.trim();
+            const val = valueInputs[index] ? valueInputs[index].value.trim() : '';
+            if (key) {
+                metadata[key] = val;
+            }
+        });
+    }
+    return metadata;
+}
+
+/**
+ * Installs once-per-page interceptors for Littlepay SDK browser fetch requests & iframe postMessages
+ * so all internal SDK network calls and card-collection events appear in the real-time logs panel.
+ */
+let littlepayInterceptorsInstalled = false;
+function ensureLittlepaySdkInterceptors() {
+    if (littlepayInterceptorsInstalled) return;
+    littlepayInterceptorsInstalled = true;
+
+    // 1. Intercept window.fetch for *.littlepay.com calls made by Littlepay SDK v2
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async function (...args) {
+        const [resource, init] = args;
+        const urlStr = typeof resource === 'string' ? resource : (resource && resource.url) || '';
+        const isLittlepayCall = urlStr.includes('littlepay.com');
+
+        if (!isLittlepayCall) {
+            return originalFetch(...args);
+        }
+
+        const method = (init && init.method) || (resource && resource.method) || 'GET';
+        let shortPath = urlStr;
+        try {
+            const parsedUrl = new URL(urlStr);
+            shortPath = parsedUrl.pathname + parsedUrl.search;
+        } catch (e) {}
+
+        let reqPayload = null;
+        if (init && init.body) {
+            try {
+                reqPayload = typeof init.body === 'string' ? JSON.parse(init.body) : init.body;
+            } catch (e) {
+                reqPayload = init.body;
+            }
+        }
+
+        log(`[Littlepay SDK -> API] ${method} ${shortPath}`, 'system', reqPayload || { method, url: urlStr });
+
+        try {
+            const response = await originalFetch(...args);
+            const cloned = response.clone();
+            cloned.text().then((bodyText) => {
+                let parsedBody = null;
+                try {
+                    parsedBody = bodyText ? JSON.parse(bodyText) : { status: response.status, statusText: response.statusText };
+                } catch (e) {
+                    parsedBody = { raw: bodyText };
+                }
+                const logType = response.ok ? 'callback' : 'error';
+                log(`[Littlepay SDK <- API] HTTP ${response.status} (${method} ${shortPath})`, logType, parsedBody);
+            }).catch(() => {});
+            return response;
+        } catch (fetchErr) {
+            log(`[Littlepay SDK Network Error] ${method} ${shortPath}: ${fetchErr.message}`, 'error');
+            throw fetchErr;
+        }
+    };
+
+    // 2. Listen for postMessage events from Littlepay card-collection / 3DS iframes
+    window.addEventListener('message', (event) => {
+        if (!event.origin || !event.origin.includes('littlepay.com')) return;
+        let payload = event.data;
+        if (typeof payload === 'string') {
+            try { payload = JSON.parse(payload); } catch (e) {}
+        }
+        log(`[Littlepay Iframe Event] postMessage from ${event.origin}`, 'callback', payload);
+    });
+}
+
+/**
+ * Queries /api/littlepay-receipt on the local proxy to inspect PaymentIntent & Stored Payment Methods
+ */
+async function fetchAndRenderLittlepayReceipt(sessionData, paymentIntentIdOverride, isError = false, sdkError = null) {
+    const metadata = getMetadataMap();
+    const rawAmount = parseInt(orderAmountInput ? orderAmountInput.value.trim() : '0', 10);
+    const amount = Number.isInteger(rawAmount) ? rawAmount : 0;
+    const currency = (orderCurrencyInput && orderCurrencyInput.value.trim()) || 'EUR';
+    const customerRef = sessionData.customer_ref || (customerRefInput && customerRefInput.value.trim()) || '';
+    const paymentIntentId = paymentIntentIdOverride || sessionData.payment_intent_id;
+
+    const inspectPayload = {
+        client_token: sessionData.client_token,
+        order_id: sessionData.id,
+        payment_intent_id: paymentIntentId,
+        customer_ref: customerRef,
+        amount: amount,
+        currency: currency,
+        metadata: metadata
+    };
+
+    log('[Proxy Littlepay] Inspecting PaymentIntent & Stored Payment Methods (/api/littlepay-receipt)...', 'system', inspectPayload);
+
+    try {
+        const res = await fetch('/api/littlepay-receipt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(inspectPayload)
+        });
+        const receiptData = await res.json();
+
+        if (receiptData.paymentIntent) {
+            log('[Littlepay API] GET /customer/v1/payment-intents/{id}', isError ? 'error' : 'success', receiptData.paymentIntent);
+        }
+        if (receiptData.storedPaymentMethods) {
+            log(`[Littlepay API] GET /customer/v1/stored-payment-methods (${receiptData.storedPaymentMethods.length} card(s) found)`, 'success', receiptData.storedPaymentMethods);
+        }
+        if (receiptData.latestStoredPaymentMethodDetail) {
+            log(`[Littlepay API] GET /customer/v1/stored-payment-methods/${receiptData.latestStoredPaymentMethod?.id} (Full Card Mask & Vault ID)`, 'success', receiptData.latestStoredPaymentMethodDetail);
+        }
+
+        const pi = receiptData.paymentIntent || {};
+        const latestSpm = receiptData.latestStoredPaymentMethod || {};
+        const latestDetail = receiptData.latestStoredPaymentMethodDetail || {};
+        const statusStr = pi.status || (isError ? 'FAILED' : 'SUCCEEDED');
+        const isApproved = !isError && (statusStr === 'SUCCEEDED' || statusStr === 'REQUIRES_CAPTURE');
+
+        const cardMask16 = latestDetail.card_mask || 'N/A';
+        const cardMask4 = latestSpm.card_mask || 'N/A';
+        const formattedMaskedPan = receiptData.formattedMaskedPan || 'SAVED_CARD';
+        const cardType = latestDetail.card_type || latestSpm.card_type || 'N/A';
+        const cardExpiry = latestDetail.card_expiry || latestSpm.card_expiry || 'N/A';
+        const fundingSourceId = latestSpm.funding_source_id || latestDetail.vault_id || 'N/A';
+        const spmId = latestSpm.id || 'N/A';
+
+        let detailsHtml = `
+            <strong>Order ID:</strong> ${receiptData.order_id || sessionData.id || 'N/A'}<br>
+            <strong>Payment Intent ID:</strong> ${receiptData.payment_intent_id || paymentIntentId || 'N/A'}<br>
+            <strong>Customer Ref:</strong> ${receiptData.customer_ref || customerRef || 'N/A'}<br>
+            <strong>Amount:</strong> ${(amount / 100).toFixed(2)} ${currency}<br>
+            <strong>Intent Status:</strong> <span style="font-weight: 700; color: ${isApproved ? 'var(--success)' : 'var(--error)'};">${statusStr}</span><br>
+            <strong>Capture Method:</strong> ${pi.capture_method || 'AUTO'}<br>
+            <strong>MIT / CoF Type:</strong> ${pi.payment_method_options?.cof_type || latestSpm.cof_type || sessionData.mit_type || 'NONE'}<br>
+            <hr style="border: none; border-top: 1px dashed rgba(0,0,0,0.12); margin: 8px 0;">
+            <strong>Stored Payment Method ID:</strong> <code>${spmId}</code><br>
+            <strong>Funding Source ID (Token):</strong> <span style="color: #2b6cb0; font-weight: 600;">${fundingSourceId}</span><br>
+            <strong>Card Type:</strong> ${cardType}<br>
+            <strong>Card Expiry:</strong> ${cardExpiry}<br>
+            <strong>Card Mask (List / 4-digit):</strong> <code>${cardMask4}</code><br>
+            <strong>Card Mask (Detail / 16-char):</strong> <code>${cardMask16}</code><br>
+            <strong>Formatted Label (wfwp-platform):</strong> <code style="font-weight: 700; color: var(--success);">${formattedMaskedPan}</code>
+        `;
+
+        if (pi.error || sdkError) {
+            detailsHtml += `<br><strong>Error Detail:</strong> <span style="color: var(--error);">${escapeHtml(JSON.stringify(pi.error || sdkError))}</span>`;
+        }
+
+        if (sdkContainer) {
+            sdkContainer.classList.remove('hidden');
+            sdkContainer.innerHTML = `
+                <div class="card-success-message" style="text-align: center; padding: 32px 20px; animation: fadeIn 0.4s ease-out;">
+                    <div style="font-size: 3rem; margin-bottom: 12px;">${isApproved ? '✅' : '❌'}</div>
+                    <h3 style="color: ${isApproved ? 'var(--success)' : 'var(--error)'}; font-weight: 700; margin-bottom: 6px;">
+                        ${isApproved ? 'Littlepay Checkout Complete!' : 'Littlepay Checkout Error / Incomplete'}
+                    </h3>
+                    <p style="font-size: 0.85rem; color: var(--text-main); margin-bottom: 16px;">
+                        ${isApproved ? 'Payment intent and stored payment method details retrieved from Littlepay.' : 'See detailed gateway and SDK response below.'}
+                    </p>
+                    <div style="background-color: ${isApproved ? 'var(--success-light)' : 'var(--error-light)'}; color: var(--text-main); border: 1px solid ${isApproved ? 'rgba(56, 161, 105, 0.2)' : 'rgba(229, 62, 62, 0.2)'}; font-family: var(--font-mono); font-size: 0.75rem; padding: 14px; border-radius: var(--radius-md); word-break: break-all; text-align: left; line-height: 1.65;">
+                        ${detailsHtml}
+                    </div>
+                </div>
+            `;
+        }
+    } catch (err) {
+        log(`[Proxy Littlepay Error] Failed to inspect Littlepay receipt: ${err.message}`, 'error');
+    }
+}
+
+/**
  * Builds the theme and layout parameters for Littlepay SDK mode
  */
 function buildSdkConfig(clientToken) {
@@ -766,6 +1034,14 @@ const SUPPORTED_PSPS = {
             }
         },
         mount: async (sessionData, context) => {
+            ensureLittlepaySdkInterceptors();
+
+            if (Array.isArray(sessionData.apiSteps)) {
+                sessionData.apiSteps.forEach((stepObj) => {
+                    log(`[Proxy Littlepay Step ${stepObj.step}] ${stepObj.name} -> HTTP ${stepObj.statusCode}`, 'success', stepObj);
+                });
+            }
+
             if (sdkContainer) {
                 sdkContainer.classList.remove('hidden');
                 sdkContainer.innerHTML = '';
@@ -774,7 +1050,7 @@ const SUPPORTED_PSPS = {
             // ROUTE A: PAYMENT LINK (Hosted Redirection)
             if (sessionData.checkoutMethod === 'link') {
                 log(`[System] Payment Link checkout flow initiated. Rendering redirection view.`, 'system');
-                log(`[System] Final Link: ${sessionData.url}`, 'success');
+                log(`[System] Final Link: ${sessionData.url}`, 'success', sessionData.linkData || { url: sessionData.url });
 
                 sdkContainer.innerHTML = `
                     <div class="payment-link-card" style="text-align: center; padding: 40px 20px; animation: fadeIn 0.4s ease-out; font-family: var(--font-sans);">
@@ -787,10 +1063,15 @@ const SUPPORTED_PSPS = {
                             <button id="btn-pl-copy" class="btn btn-secondary btn-sm" style="width: auto; padding: 10px 16px; font-size: 0.85rem; border-radius: var(--radius-md);">Copy</button>
                         </div>
 
-                        <button id="btn-pl-open" class="btn btn-primary" style="width: 100%; padding: 14px; font-size: 0.95rem; border-radius: var(--radius-md); background-color: var(--primary); font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
-                            <span>Open Hosted Checkout</span>
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
-                        </button>
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <button id="btn-pl-open" class="btn btn-primary" style="width: 100%; padding: 14px; font-size: 0.95rem; border-radius: var(--radius-md); background-color: var(--primary); font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                                <span>Open Hosted Checkout</span>
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                            </button>
+                            <button id="btn-pl-inspect" class="btn btn-secondary" style="width: 100%; padding: 12px; font-size: 0.85rem; border-radius: var(--radius-md); font-weight: 600; cursor: pointer;">
+                                🔍 Inspect Payment Intent & Stored Cards (Receipt)
+                            </button>
+                        </div>
                     </div>
                 `;
 
@@ -815,49 +1096,63 @@ const SUPPORTED_PSPS = {
                         window.open(sessionData.url, '_blank');
                     });
                 }
+
+                const inspectBtn = document.getElementById('btn-pl-inspect');
+                if (inspectBtn) {
+                    inspectBtn.addEventListener('click', async () => {
+                        inspectBtn.disabled = true;
+                        inspectBtn.textContent = 'Inspecting Littlepay APIs...';
+                        await fetchAndRenderLittlepayReceipt(sessionData, sessionData.payment_intent_id, false, null);
+                    });
+                }
                 return;
             }
 
             // ROUTE B: INLINE SDK (Direct Mount Form)
             const config = buildSdkConfig(sessionData.client_token);
-            log('[System] Initializing window.LittlePay() with configuration...', 'system');
+            log('[Littlepay SDK] Initializing window.LittlePay() with configuration', 'system', {
+                targetElementId: config.targetElementId,
+                locale: config.locale,
+                options: config.options,
+                payment_intent_id: sessionData.payment_intent_id,
+                order_id: sessionData.id
+            });
 
             littlePayInstance = window.LittlePay(config);
-            log('[System] Littlepay SDK Instance created successfully.', 'success');
+            log('[Littlepay SDK] Littlepay SDK Instance created successfully.', 'success');
             if (unmountBtn) unmountBtn.disabled = false;
             
-            const errorCallback = (error) => {
-                log(`[Callback] errorCallback fired`, 'error', error);
+            const errorCallback = async (error) => {
+                log(`[Littlepay Callback] errorCallback fired (Raw SDK Payload)`, 'error', error);
                 updateActiveAttemptStatus('error');
                 console.error('Littlepay SDK Error callback:', error);
+                await fetchAndRenderLittlepayReceipt(sessionData, sessionData.payment_intent_id, true, error);
             };
             
-            const successCallback = (paymentIntentId) => {
-                log(`[Callback] successCallback fired with Payment Intent ID`, 'success', { payment_intent_id: paymentIntentId });
-                log('[System] Stored Payment Method registered successfully! Card saved.', 'success');
-                updateActiveAttemptStatus('success');
+            const successCallback = async (paymentIntentId) => {
+                log(`[Littlepay Callback] successCallback fired (Raw SDK Payload)`, 'success', {
+                    payment_intent_id: paymentIntentId,
+                    order_id: sessionData.id
+                });
+                updateActiveAttemptStatus('success', sessionData.id);
                 
                 cleanupExistingSession();
                 if (unmountBtn) unmountBtn.disabled = true;
-                
-                if (sdkContainer) {
-                    sdkContainer.classList.remove('hidden');
-                    sdkContainer.innerHTML = `
-                        <div class="card-success-message" style="text-align: center; padding: 40px 20px; animation: fadeIn 0.4s ease-out;">
-                            <div style="font-size: 3rem; margin-bottom: 16px;">✅</div>
-                            <h3 style="color: var(--success); font-weight: 700; margin-bottom: 8px;">Registration Successful!</h3>
-                            <p style="font-size: 0.85rem; color: var(--text-main); margin-bottom: 16px;">The stored payment method was registered securely.</p>
-                            <div style="background-color: var(--success-light); color: var(--success); border: 1px solid rgba(56, 161, 105, 0.2); font-family: var(--font-mono); font-size: 0.75rem; padding: 12px; border-radius: var(--radius-md); word-break: break-all; text-align: left;">
-                                <strong>Payment Intent ID:</strong><br>${paymentIntentId}
-                            </div>
-                        </div>
-                    `;
-                }
+
+                await fetchAndRenderLittlepayReceipt(sessionData, paymentIntentId, false, null);
             };
 
-            log('[System] Launching registerCard() flow...', 'system');
-            littlePayInstance.registerCard(errorCallback, successCallback);
-            log('[System] registerCard() form rendering within target container.', 'system');
+            const sdkMethod = sessionData.mit_type ? 'registerCard' : 'makePayment';
+            log(`[Littlepay SDK] Launching ${sdkMethod}() flow...`, 'system', {
+                method: sdkMethod,
+                mit_type: sessionData.mit_type || null
+            });
+            if (sdkMethod === 'registerCard' || typeof littlePayInstance.makePayment !== 'function') {
+                littlePayInstance.registerCard(errorCallback, successCallback);
+            } else {
+                littlePayInstance.makePayment(errorCallback, successCallback);
+            }
+            log(`[Littlepay SDK] ${sdkMethod}() form rendering within target container.`, 'system');
         }
     },
 

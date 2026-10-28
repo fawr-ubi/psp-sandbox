@@ -117,17 +117,25 @@ body {
 /* App Grid Layout */
 .app-grid {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 24px;
     margin-top: 32px;
     margin-bottom: 32px;
     flex-grow: 1;
+    align-items: start;
 }
 
 @media (min-width: 900px) {
     .app-grid {
-        grid-template-columns: 500px 1fr;
+        grid-template-columns: 500px minmax(0, 1fr);
     }
+}
+
+.preview-panel {
+    min-width: 0;
+    max-width: 100%;
+    display: flex;
+    flex-direction: column;
 }
 
 /* Card Styling */
@@ -381,8 +389,10 @@ input[type="color"]::-webkit-color-swatch {
 
 /* Preview / SDK Elements */
 .preview-card {
-    flex-grow: 1;
     min-height: 380px;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
 }
 
 .preview-header {
@@ -444,6 +454,9 @@ input[type="color"]::-webkit-color-swatch {
     padding: 16px;
     background-color: #fafbfc;
     transition: all 0.25s ease;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
 }
 
 .logs-card.logs-fullscreen {
@@ -578,8 +591,11 @@ input[type="color"]::-webkit-color-swatch {
     border-radius: var(--radius-md);
     height: 280px;
     min-height: 180px;
-    max-height: 85vh;
+    max-height: 60vh;
+    min-width: 0;
+    max-width: 100%;
     resize: vertical;
+    overflow-x: hidden;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -597,7 +613,10 @@ input[type="color"]::-webkit-color-swatch {
     border: 1px solid #1e293b;
     background-color: #162032;
     border-radius: var(--radius-md);
-    overflow: visible;
+    overflow: hidden;
+    flex-shrink: 0;
+    min-width: 0;
+    max-width: 100%;
     transition: border-color 0.2s ease;
 }
 
@@ -768,17 +787,23 @@ input[type="color"]::-webkit-color-swatch {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    min-width: 0;
+    max-width: 100%;
 }
 
 /* Individual Log Entry */
 .log-entry {
     line-height: 1.45;
     word-break: break-word;
+    overflow-wrap: anywhere;
     padding: 6px 8px;
     border-radius: 4px;
     background-color: rgba(15, 23, 42, 0.55);
     border-left: 2px solid transparent;
     position: relative;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
 }
 
 .log-entry:hover {
@@ -790,6 +815,8 @@ input[type="color"]::-webkit-color-swatch {
     align-items: flex-start;
     justify-content: space-between;
     gap: 8px;
+    min-width: 0;
+    max-width: 100%;
 }
 
 .log-entry-main {
@@ -798,6 +825,8 @@ input[type="color"]::-webkit-color-swatch {
     flex-wrap: wrap;
     gap: 6px;
     flex: 1;
+    min-width: 0;
+    max-width: 100%;
 }
 
 .log-timestamp {
@@ -843,6 +872,8 @@ input[type="color"]::-webkit-color-swatch {
     border: 1px solid #1e293b;
     border-radius: 4px;
     overflow: hidden;
+    min-width: 0;
+    max-width: 100%;
 }
 
 .log-payload-toolbar {
@@ -854,6 +885,14 @@ input[type="color"]::-webkit-color-swatch {
     border-bottom: 1px solid #1e293b;
     font-size: 0.66rem;
     color: #64748b;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.log-payload-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .log-payload-pre {
@@ -863,9 +902,13 @@ input[type="color"]::-webkit-color-swatch {
     font-size: 0.72rem;
     line-height: 1.4;
     color: #cbd5e1;
+    min-width: 0;
+    max-width: 100%;
     overflow-x: auto;
-    white-space: pre;
-    max-height: 320px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    max-height: 220px;
     overflow-y: auto;
 }
 
