@@ -147,6 +147,15 @@ function parseMonerisXmlReceipt(xmlStr) {
     return result;
 }
 
+const DEFAULT_MONERIS_QA_PROFILES = {
+    save_card_light: 'chktCFAGT15557',
+    save_card_dark: 'chktCFAGT15557',
+    payment_with_save_card_light: 'chktTHANC15557',
+    payment_with_save_card_dark: 'chktTHANC15557',
+    payment_without_save_card_light: 'chktRGSK815557',
+    payment_without_save_card_dark: 'chktRGSK815557'
+};
+
 function getMonerisCheckoutProfilesMap() {
     let profiles = {};
     if (process.env.MONERIS_CHECKOUT_PROFILES) {
@@ -164,7 +173,7 @@ function getMonerisCheckoutProfilesMap() {
     const defaultId = (process.env.MONERIS_CHECKOUT_ID || '').trim();
     for (const alias of MONERIS_PROFILE_ALIASES) {
         if (!profiles[alias] || profiles[alias] === 'FILLME') {
-            profiles[alias] = defaultId;
+            profiles[alias] = DEFAULT_MONERIS_QA_PROFILES[alias] || defaultId;
         }
     }
     return profiles;
@@ -271,7 +280,7 @@ async function handleMonerisSession(sessionParams, res) {
     const rawCents = orderPayload && orderPayload.charge && Number.isFinite(Number(orderPayload.charge.amount))
         ? Number(orderPayload.charge.amount)
         : 1000;
-    const rawPaymentContext = (localCallback && localCallback.paymentContext) || metadata.payment_context || '';
+    const rawPaymentContext = metadata.payment_context || (localCallback && localCallback.paymentContext) || '';
     const paymentContext = normalizePaymentContext(rawPaymentContext, rawCents);
     const rawCustId = (localCallback && localCallback.customerRef)
         || (orderPayload && orderPayload.customer_ref)
@@ -398,11 +407,24 @@ async function handleMonerisSession(sessionParams, res) {
             cust_id: preloadPayload.cust_id || null
         }, 'handleMonerisSession (MCO Preload)');
     } else {
-        const errDetail = parsedData && parsedData.response && parsedData.response.error
-            ? `${parsedData.response.error.field}: ${parsedData.response.error.message}`
-            : mcoRes.body;
+        let errDetail = mcoRes.body;
+        const errObj = parsedData && parsedData.response && parsedData.response.error;
+        if (errObj) {
+            if (typeof errObj === 'string') {
+                errDetail = errObj;
+            } else if (errObj.field || errObj.message) {
+                errDetail = `${errObj.field || 'error'}: ${errObj.message || JSON.stringify(errObj)}`;
+            } else if (typeof errObj === 'object') {
+                errDetail = Object.entries(errObj)
+                    .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+                    .join(', ');
+            }
+        }
+        const zeroDollarHint = (chargeAmount === '0.00' && String(errDetail).includes('txn_total'))
+            ? ` — Note: Profile '${checkoutId}' (${resolvedAlias}) is configured in Moneris as a Purchase profile and requires an amount > 0 (e.g. 1000 cents / $10.00). Only 'chktCFAGT15557' (save_card_*) supports $0.00 Card Verification.`
+            : '';
         sendJsonResponse(res, 400, {
-            error: `Moneris Checkout preload failed (${errDetail}). Please verify your MONERIS_STORE_ID, MONERIS_API_TOKEN, MONERIS_CHECKOUT_ID, and MONERIS_ENV.`
+            error: `Moneris Checkout preload failed (${errDetail})${zeroDollarHint}`
         }, 'handleMonerisSession Error');
     }
 }
@@ -2325,9 +2347,7 @@ const server = http.createServer((req, res) => {
                         }
                     } else {
                         updatedProfiles[targetAlias] = checkoutId;
-                        if (!envLocal.MONERIS_CHECKOUT_ID) {
-                            envLocal.MONERIS_CHECKOUT_ID = checkoutId;
-                        }
+                        envLocal.MONERIS_CHECKOUT_ID = checkoutId;
                     }
                 }
 
@@ -2461,6 +2481,8 @@ const server = http.createServer((req, res) => {
     let filePath = '.' + pathname;
     if (filePath === './') {
         filePath = './index.html';
+    } else if (filePath === './favicon.ico') {
+        filePath = './favicon.svg';
     }
 
     filePath = filePath.split('?')[0];
