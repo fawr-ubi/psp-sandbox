@@ -215,7 +215,7 @@ function parseLogContent(rawMessage, explicitData = null, type = 'system') {
 /**
  * Copies text to clipboard and flashes button visual state
  */
-async function copyTextWithFeedback(text, btnElement, defaultLabel = '📋 Copy', copiedLabel = '✅ Copied!') {
+async function copyTextWithFeedback(text, btnElement, defaultLabel = 'Copy', copiedLabel = 'Copied') {
     try {
         if (navigator.clipboard && navigator.clipboard.writeText) {
             await navigator.clipboard.writeText(text);
@@ -333,7 +333,7 @@ function createLogGroup({ isSystemGroup = false, pspId = 'system', pspName = 'Sy
     const copyAttemptBtn = document.createElement('button');
     copyAttemptBtn.type = 'button';
     copyAttemptBtn.className = 'btn-copy-attempt';
-    copyAttemptBtn.textContent = isSystemGroup ? '📋 Copy System Logs' : '📋 Copy Attempt Logs';
+    copyAttemptBtn.textContent = isSystemGroup ? 'Copy System Logs' : 'Copy Attempt Logs';
 
     actionsEl.appendChild(copyAttemptBtn);
     headerEl.appendChild(infoEl);
@@ -372,7 +372,7 @@ function createLogGroup({ isSystemGroup = false, pspId = 'system', pspName = 'Sy
         copyTextWithFeedback(
             textToCopy,
             copyAttemptBtn,
-            isSystemGroup ? '📋 Copy System Logs' : '📋 Copy Attempt Logs'
+            isSystemGroup ? 'Copy System Logs' : 'Copy Attempt Logs'
         );
     });
 
@@ -551,7 +551,7 @@ function log(message, type = 'system', explicitData = null, fromBroadcast = fals
         const isCollapsed = entry.classList.toggle('entry-collapsed');
         const foldLineBtn = entry.querySelector('.log-fold-line-btn');
         if (foldLineBtn) {
-            foldLineBtn.textContent = isCollapsed ? '➕ Unfold Line' : '➖ Fold Line';
+            foldLineBtn.textContent = isCollapsed ? 'Unfold Line' : 'Fold Line';
         }
     };
 
@@ -606,11 +606,11 @@ function log(message, type = 'system', explicitData = null, fromBroadcast = fals
         const copyEntryBtn = document.createElement('button');
         copyEntryBtn.type = 'button';
         copyEntryBtn.className = 'btn-copy-entry';
-        copyEntryBtn.textContent = '📋 Copy';
+        copyEntryBtn.textContent = 'Copy';
         copyEntryBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             const rawText = `[${timestamp}] [${category}] ${cleanText}`;
-            copyTextWithFeedback(rawText, copyEntryBtn, '📋 Copy');
+            copyTextWithFeedback(rawText, copyEntryBtn, 'Copy');
         });
         topRow.appendChild(copyEntryBtn);
     }
@@ -660,7 +660,7 @@ function log(message, type = 'system', explicitData = null, fromBroadcast = fals
         const foldPayloadBtn = document.createElement('button');
         foldPayloadBtn.type = 'button';
         foldPayloadBtn.className = 'btn-copy-entry log-fold-line-btn';
-        foldPayloadBtn.textContent = '➖ Fold Line';
+        foldPayloadBtn.textContent = 'Fold Line';
         foldPayloadBtn.title = 'Collapse this log entry & payload into a single line';
         foldPayloadBtn.addEventListener('click', toggleEntryCollapsed);
         toolbarActions.appendChild(foldPayloadBtn);
@@ -670,11 +670,11 @@ function log(message, type = 'system', explicitData = null, fromBroadcast = fals
             const toggleTokensBtn = document.createElement('button');
             toggleTokensBtn.type = 'button';
             toggleTokensBtn.className = 'btn-copy-entry';
-            toggleTokensBtn.textContent = '🔍 Expand Tokens';
+            toggleTokensBtn.textContent = 'Expand Tokens';
             toggleTokensBtn.addEventListener('click', () => {
                 isExpanded = !isExpanded;
                 renderPreContent(isExpanded ? formattedString : compactedFormattedString);
-                toggleTokensBtn.textContent = isExpanded ? '🔽 Compact Tokens' : '🔍 Expand Tokens';
+                toggleTokensBtn.textContent = isExpanded ? 'Compact Tokens' : 'Expand Tokens';
                 labelSpan.textContent = isJsonObj
                     ? (isExpanded ? 'JSON Payload (full tokens)' : 'JSON Payload (tokens compacted)')
                     : 'Payload Data';
@@ -685,10 +685,10 @@ function log(message, type = 'system', explicitData = null, fromBroadcast = fals
         const copyPayloadBtn = document.createElement('button');
         copyPayloadBtn.type = 'button';
         copyPayloadBtn.className = 'btn-copy-entry';
-        copyPayloadBtn.textContent = '📋 Copy Payload';
+        copyPayloadBtn.textContent = 'Copy Payload';
 
         copyPayloadBtn.addEventListener('click', () => {
-            copyTextWithFeedback(formattedString, copyPayloadBtn, '📋 Copy Payload');
+            copyTextWithFeedback(formattedString, copyPayloadBtn, 'Copy Payload');
         });
 
         toolbarActions.appendChild(copyPayloadBtn);
@@ -977,21 +977,21 @@ async function fetchAndRenderLittlepayReceipt(sessionData, paymentIntentIdOverri
             <strong>Payment Intent ID:</strong> ${receiptData.payment_intent_id || paymentIntentId || 'N/A'}<br>
             <strong>Customer Ref:</strong> ${receiptData.customer_ref || customerRef || 'N/A'}<br>
             <strong>Amount:</strong> ${(amount / 100).toFixed(2)} ${currency}<br>
-            <strong>Intent Status:</strong> <span style="font-weight: 700; color: ${isApproved ? 'var(--success)' : 'var(--error)'};">${statusStr}</span><br>
+            <strong>Intent Status:</strong> <span style="font-weight: 700; color: ${isApproved ? 'var(--status-ok-text)' : 'var(--status-err-text)'};">${statusStr}</span><br>
             <strong>Capture Method:</strong> ${pi.capture_method || 'AUTO'}<br>
             <strong>MIT / CoF Type:</strong> ${pi.payment_method_options?.cof_type || latestSpm.cof_type || sessionData.mit_type || 'NONE'}<br>
-            <hr style="border: none; border-top: 1px dashed rgba(0,0,0,0.12); margin: 8px 0;">
+            <hr style="border: none; border-top: 1px dashed var(--border-color); margin: 8px 0;">
             <strong>Stored Payment Method ID:</strong> <code>${spmId}</code><br>
-            <strong>Funding Source ID (Token):</strong> <span style="color: #2b6cb0; font-weight: 600;">${fundingSourceId}</span><br>
+            <strong>Funding Source ID (Token):</strong> <span style="color: var(--accent-indicator); font-weight: 600;">${fundingSourceId}</span><br>
             <strong>Card Type:</strong> ${cardType}<br>
             <strong>Card Expiry:</strong> ${cardExpiry}<br>
             <strong>Card Mask (List / 4-digit):</strong> <code>${cardMask4}</code><br>
             <strong>Card Mask (Detail / 16-char):</strong> <code>${cardMask16}</code><br>
-            <strong>Formatted Label (wfwp-platform):</strong> <code style="font-weight: 700; color: var(--success);">${formattedMaskedPan}</code>
+            <strong>Formatted Label (wfwp-platform):</strong> <code style="font-weight: 700; color: var(--status-ok-text);">${formattedMaskedPan}</code>
         `;
 
         if (pi.error || sdkError) {
-            detailsHtml += `<br><strong>Error Detail:</strong> <span style="color: var(--error);">${escapeHtml(JSON.stringify(pi.error || sdkError))}</span>`;
+            detailsHtml += `<br><strong>Error Detail:</strong> <span style="color: var(--status-err-text);">${escapeHtml(JSON.stringify(pi.error || sdkError))}</span>`;
         }
 
         // Populate Local Callback LittlePay fields with the latest checkout values
@@ -1008,9 +1008,9 @@ async function fetchAndRenderLittlepayReceipt(sessionData, paymentIntentIdOverri
         });
 
         detailsHtml += `
-            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(47, 133, 90, 0.25);">
-                <button type="button" class="btn-use-saved-token btn-forward-callback-inline btn-trigger-local-cb" data-psp="littlepay" data-order-id="${receiptData.order_id || sessionData.id || ''}" style="width: 100%; padding: 8px 12px; font-size: 0.78rem; font-weight: 700; color: #ffffff; background: linear-gradient(135deg, #276749 0%, #2f855a 100%); border: none; border-radius: 6px; cursor: pointer;">
-                    🔄 Forward Callback to Local Server (wfwp-platform)
+            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-color);">
+                <button type="button" class="btn btn-primary btn-use-saved-token btn-forward-callback-inline btn-trigger-local-cb" data-psp="littlepay" data-order-id="${receiptData.order_id || sessionData.id || ''}" style="width: 100%; justify-content: center;">
+                    Forward Callback to Local Server (wfwp-platform)
                 </button>
             </div>
         `;
@@ -1019,15 +1019,17 @@ async function fetchAndRenderLittlepayReceipt(sessionData, paymentIntentIdOverri
         if (sdkContainer) {
             sdkContainer.classList.remove('hidden');
             sdkContainer.innerHTML = `
-                <div class="card-success-message" style="text-align: center; padding: 32px 20px; animation: fadeIn 0.4s ease-out;">
-                    <div style="font-size: 3rem; margin-bottom: 12px;">${isApproved ? '✅' : '❌'}</div>
-                    <h3 style="color: ${isApproved ? 'var(--success)' : 'var(--error)'}; font-weight: 700; margin-bottom: 6px;">
-                        ${isApproved ? 'Littlepay Checkout Complete!' : 'Littlepay Checkout Error / Incomplete'}
-                    </h3>
-                    <p style="font-size: 0.85rem; color: var(--text-main); margin-bottom: 16px;">
+                <div class="card-success-message">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle);">
+                        <h3 style="color: ${isApproved ? 'var(--status-ok-text)' : 'var(--status-err-text)'}; font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600;">
+                            ${isApproved ? '[OK] Littlepay Checkout Complete' : '[ERR] Littlepay Checkout Incomplete'}
+                        </h3>
+                        <span class="badge">${statusStr}</span>
+                    </div>
+                    <p style="font-size: 0.76rem; color: var(--text-secondary); margin-bottom: 12px;">
                         ${isApproved ? 'Payment intent and stored payment method details retrieved from Littlepay.' : 'See detailed gateway and SDK response below.'}
                     </p>
-                    <div style="background-color: ${isApproved ? 'var(--success-light)' : 'var(--error-light)'}; color: var(--text-main); border: 1px solid ${isApproved ? 'rgba(56, 161, 105, 0.2)' : 'rgba(229, 62, 62, 0.2)'}; font-family: var(--font-mono); font-size: 0.75rem; padding: 14px; border-radius: var(--radius-md); word-break: break-all; text-align: left; line-height: 1.65;">
+                    <div style="background-color: var(--bg-input); color: var(--text-main); border: 1px solid ${isApproved ? 'var(--status-ok-border)' : 'var(--status-err-border)'}; font-family: var(--font-mono); font-size: 0.72rem; padding: 12px; border-radius: var(--radius-sm); word-break: break-all; text-align: left; line-height: 1.6;">
                         ${detailsHtml}
                     </div>
                 </div>
@@ -1196,23 +1198,24 @@ const SUPPORTED_PSPS = {
                 log(`[System] Final Link: ${sessionData.url}`, 'success', sessionData.linkData || { url: sessionData.url });
 
                 sdkContainer.innerHTML = `
-                    <div class="payment-link-card" style="text-align: center; padding: 40px 20px; animation: fadeIn 0.4s ease-out; font-family: var(--font-sans);">
-                        <div style="font-size: 3.5rem; margin-bottom: 16px; color: var(--primary);">🔗</div>
-                        <h3 style="color: var(--text-main); font-weight: 700; margin-bottom: 8px;">Payment Link Generated!</h3>
-                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 24px;">Your hosted checkout payment link is ready for secure card registration.</p>
+                    <div class="payment-link-card">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle);">
+                            <h3 style="color: var(--text-main); font-family: var(--font-mono); font-size: 0.84rem; font-weight: 600;">[LINK] Hosted Payment Link Generated</h3>
+                            <span class="badge">REDIRECT</span>
+                        </div>
+                        <p style="font-size: 0.76rem; color: var(--text-secondary); margin-bottom: 12px;">Hosted checkout URL ready for card registration or payment.</p>
                         
-                        <div style="display: flex; gap: 8px; margin-bottom: 20px;">
-                            <input type="text" id="pl-url-input" value="${sessionData.url}" readonly style="flex-grow: 1; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: var(--radius-md); font-family: var(--font-mono); font-size: 0.75rem; background-color: #f8fafc; color: var(--text-main);">
-                            <button id="btn-pl-copy" class="btn btn-secondary btn-sm" style="width: auto; padding: 10px 16px; font-size: 0.85rem; border-radius: var(--radius-md);">Copy</button>
+                        <div style="display: flex; gap: 6px; margin-bottom: 12px;">
+                            <input type="text" id="pl-url-input" value="${sessionData.url}" readonly class="mono-input" style="flex-grow: 1;">
+                            <button id="btn-pl-copy" class="btn btn-secondary btn-sm" style="width: auto;">Copy</button>
                         </div>
 
-                        <div style="display: flex; flex-direction: column; gap: 10px;">
-                            <button id="btn-pl-open" class="btn btn-primary" style="width: 100%; padding: 14px; font-size: 0.95rem; border-radius: var(--radius-md); background-color: var(--primary); font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                            <button id="btn-pl-open" class="btn btn-primary" style="width: 100%;">
                                 <span>Open Hosted Checkout</span>
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
                             </button>
-                            <button id="btn-pl-inspect" class="btn btn-secondary" style="width: 100%; padding: 12px; font-size: 0.85rem; border-radius: var(--radius-md); font-weight: 600; cursor: pointer;">
-                                🔍 Inspect Payment Intent & Stored Cards (Receipt)
+                            <button id="btn-pl-inspect" class="btn btn-secondary" style="width: 100%;">
+                                Inspect Payment Intent & Stored Cards (Receipt)
                             </button>
                         </div>
                     </div>
@@ -1381,26 +1384,23 @@ const SUPPORTED_PSPS = {
                         <div class="vault-container">
                             <div class="vault-header">
                                 <div class="vault-title">
-                                    <span>🔐 Moneris Vault (Card on File)</span>
+                                    <span>[VAULT] Moneris Card on File</span>
                                 </div>
                                 <span class="vault-security-badge">
-                                    <span>🔒</span> Zero-PCI Vault Token
+                                    Zero-PCI Token
                                 </span>
                             </div>
 
                             <div class="vault-token-card">
-                                <div class="vault-token-chip">💳</div>
-                                <div>
-                                    <div class="vault-token-meta">SAVED MONERIS TOKEN</div>
-                                    <div class="vault-token-number">${sessionData.dataKey}</div>
-                                </div>
+                                <div class="vault-token-chip">SAVED MONERIS DATA_KEY</div>
+                                <div class="vault-token-number">${sessionData.dataKey}</div>
                                 <div class="vault-token-meta">
                                     <span>${cardLabel}</span>
                                     <span>${sessionData.expDate ? `EXP: ${sessionData.expDate}` : 'VAULT PROFILE'}</span>
                                 </div>
                             </div>
 
-                            <div class="vault-details-list">
+                            <div class="vault-details-list" style="font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.6;">
                                 <strong>Order ID:</strong> ${sessionData.order_no}<br>
                                 <strong>Amount:</strong> $${sessionData.amount} ${sessionData.currency}<br>
                                 <strong>Customer ID:</strong> ${(customerRefInput && customerRefInput.value.trim()) || '1'}<br>
@@ -1408,7 +1408,7 @@ const SUPPORTED_PSPS = {
                                 <strong>Transaction Type:</strong> ${actionType === 'purchase' ? 'Vault Purchase (res_purchase_cc)' : 'Card Verification (res_cardverification_cc)'}
                             </div>
 
-                            <button type="button" id="btn-vault-confirm-pay" class="vault-submit-btn">
+                            <button type="button" id="btn-vault-confirm-pay" class="btn btn-primary vault-submit-btn">
                                 <span>${submitBtnLabel}</span>
                             </button>
                         </div>
@@ -1464,21 +1464,23 @@ const SUPPORTED_PSPS = {
                         if (sdkContainer) {
                             sdkContainer.classList.remove('hidden');
                             sdkContainer.innerHTML = `
-                                <div class="card-success-message" style="text-align: center; padding: 40px 20px; animation: fadeIn 0.4s ease-out;">
-                                    <div style="font-size: 3rem; margin-bottom: 16px;">${isApproved ? '✅' : '❌'}</div>
-                                    <h3 style="color: ${isApproved ? 'var(--success)' : 'var(--error)'}; font-weight: 700; margin-bottom: 8px;">${title}</h3>
-                                    <p style="font-size: 0.85rem; color: var(--text-main); margin-bottom: 16px;">${subtitle}</p>
-                                    <div style="background-color: ${isApproved ? 'var(--success-light)' : 'var(--error-light)'}; color: var(--text-main); border: 1px solid ${isApproved ? 'rgba(56, 161, 105, 0.2)' : 'rgba(229, 62, 62, 0.2)'}; font-family: var(--font-mono); font-size: 0.75rem; padding: 16px; border-radius: var(--radius-md); text-align: left; line-height: 1.7; word-break: break-all;">
+                                <div class="card-success-message">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle);">
+                                        <h3 style="color: ${isApproved ? 'var(--status-ok-text)' : 'var(--status-err-text)'}; font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600;">${isApproved ? '[OK]' : '[ERR]'} ${title}</h3>
+                                        <span class="badge">${isApproved ? 'APPROVED' : 'DECLINED'}</span>
+                                    </div>
+                                    <p style="font-size: 0.76rem; color: var(--text-secondary); margin-bottom: 12px;">${subtitle}</p>
+                                    <div style="background-color: var(--bg-input); color: var(--text-main); border: 1px solid ${isApproved ? 'var(--status-ok-border)' : 'var(--status-err-border)'}; font-family: var(--font-mono); font-size: 0.72rem; padding: 12px; border-radius: var(--radius-sm); text-align: left; line-height: 1.65; word-break: break-all;">
                                         <strong>Order ID:</strong> ${receiptId}<br>
                                         <strong>Transaction Type:</strong> Vault Purchase (res_purchase_cc)<br>
                                         <strong>Amount:</strong> $${sessionData.amount} ${sessionData.currency}<br>
-                                        <strong>Status:</strong> <span style="font-weight: 700; color: ${isApproved ? 'var(--success)' : 'var(--error)'};">${isApproved ? 'APPROVED' : 'DECLINED'}</span><br>
-                                        <strong>Gateway Message:</strong> <span style="font-weight: 600; color: ${isApproved ? 'var(--success)' : 'var(--error)'};">${message}</span><br>
+                                        <strong>Status:</strong> <span style="font-weight: 700; color: ${isApproved ? 'var(--status-ok-text)' : 'var(--status-err-text)'};">${isApproved ? 'APPROVED' : 'DECLINED'}</span><br>
+                                        <strong>Gateway Message:</strong> <span style="font-weight: 600; color: ${isApproved ? 'var(--status-ok-text)' : 'var(--status-err-text)'};">${message}</span><br>
                                         <strong>Response Code:</strong> ${receipt.ResponseCode || 'N/A'}<br>
                                         <strong>Auth Code:</strong> ${authCode}<br>
                                         <strong>Reference Num:</strong> ${refNum}<br>
                                         <strong>Txn Number:</strong> ${txnNum}<br>
-                                        <strong>Charged Data Key:</strong> <span style="color: #2b6cb0; font-weight: 600;">${sessionData.dataKey}</span>
+                                        <strong>Charged Data Key:</strong> <span style="color: var(--accent-indicator); font-weight: 600;">${sessionData.dataKey}</span>
                                     </div>
                                 </div>
                             `;
@@ -1597,9 +1599,9 @@ const SUPPORTED_PSPS = {
                     if (amount !== undefined && amount !== null) {
                         detailsHtml += `<br><strong>Amount:</strong> $${amount} CAD`;
                     }
-                    detailsHtml += `<br><strong>Status:</strong> <span style="font-weight: 700; color: ${isApproved ? 'var(--success)' : 'var(--error)'};">${isApproved ? 'APPROVED' : 'DECLINED'}</span>`;
+                    detailsHtml += `<br><strong>Status:</strong> <span style="font-weight: 700; color: ${isApproved ? 'var(--status-ok-text)' : 'var(--status-err-text)'};">${isApproved ? 'APPROVED' : 'DECLINED'}</span>`;
                     if (gatewayMessage) {
-                        detailsHtml += `<br><strong>Gateway Message:</strong> <span style="color: ${isApproved ? 'var(--success)' : 'var(--error)'}; font-weight: 600;">${gatewayMessage}</span>`;
+                        detailsHtml += `<br><strong>Gateway Message:</strong> <span style="color: ${isApproved ? 'var(--status-ok-text)' : 'var(--status-err-text)'}; font-weight: 600;">${gatewayMessage}</span>`;
                     }
                     if (responseCodeStr) {
                         detailsHtml += `<br><strong>Response Code:</strong> ${responseCodeStr}`;
@@ -1619,8 +1621,8 @@ const SUPPORTED_PSPS = {
                             cardMasked: cardMasked || '•••• •••• •••• ••••',
                             source: 'Moneris Checkout (MCO)'
                         });
-                        detailsHtml += `<br><strong>Vault Token (data_key):</strong> <span style="color: #2b6cb0; font-weight: 600;">${tokenize.datakey}</span><br>`;
-                        detailsHtml += `<button type="button" class="btn-use-saved-token" data-token="${tokenize.datakey}">💳 Pay Next Order with This Saved Token</button>`;
+                        detailsHtml += `<br><strong>Vault Token (data_key):</strong> <span style="color: var(--accent-indicator); font-weight: 600;">${tokenize.datakey}</span><br>`;
+                        detailsHtml += `<button type="button" class="btn-use-saved-token" data-token="${tokenize.datakey}">Pay Next Order with This Saved Token</button>`;
                     }
 
                     const cbMonerisTicketInput = document.getElementById('cbMonerisTicket');
@@ -1629,9 +1631,9 @@ const SUPPORTED_PSPS = {
                     }
 
                     detailsHtml += `
-                        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(43, 108, 176, 0.25);">
-                            <button type="button" class="btn-forward-callback-inline" data-psp="moneris" data-ticket="${sessionData.ticket || ''}" style="width: 100%; padding: 8px 12px; font-size: 0.78rem; font-weight: 700; color: #ffffff; background: linear-gradient(135deg, #2b6cb0 0%, #3182ce 100%); border: none; border-radius: 6px; cursor: pointer;">
-                                🔄 Forward Callback to Local Server (wfwp-platform)
+                        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-color);">
+                            <button type="button" class="btn btn-primary btn-forward-callback-inline" data-psp="moneris" data-ticket="${sessionData.ticket || ''}" style="width: 100%;">
+                                Forward Callback to Local Server (wfwp-platform)
                             </button>
                         </div>
                     `;
@@ -1640,11 +1642,13 @@ const SUPPORTED_PSPS = {
                     if (sdkContainer) {
                         sdkContainer.classList.remove('hidden');
                         sdkContainer.innerHTML = `
-                            <div class="card-success-message" style="text-align: center; padding: 40px 20px; animation: fadeIn 0.4s ease-out;">
-                                <div style="font-size: 3rem; margin-bottom: 16px;">${isApproved ? '✅' : '❌'}</div>
-                                <h3 style="color: ${isApproved ? 'var(--success)' : 'var(--error)'}; font-weight: 700; margin-bottom: 8px;">${title}</h3>
-                                <p style="font-size: 0.85rem; color: var(--text-main); margin-bottom: 16px;">${subtitle}</p>
-                                <div style="background-color: ${isApproved ? 'var(--success-light)' : 'var(--error-light)'}; color: var(--text-main); border: 1px solid ${isApproved ? 'rgba(56, 161, 105, 0.2)' : 'rgba(229, 62, 62, 0.2)'}; font-family: var(--font-mono); font-size: 0.75rem; padding: 12px; border-radius: var(--radius-md); word-break: break-all; text-align: left; line-height: 1.6;">
+                            <div class="card-success-message">
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle);">
+                                    <h3 style="color: ${isApproved ? 'var(--status-ok-text)' : 'var(--status-err-text)'}; font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600;">${isApproved ? '[OK]' : '[ERR]'} ${title}</h3>
+                                    <span class="badge">${isApproved ? 'APPROVED' : 'DECLINED'}</span>
+                                </div>
+                                <p style="font-size: 0.76rem; color: var(--text-secondary); margin-bottom: 12px;">${subtitle}</p>
+                                <div style="background-color: var(--bg-input); color: var(--text-main); border: 1px solid ${isApproved ? 'var(--status-ok-border)' : 'var(--status-err-border)'}; font-family: var(--font-mono); font-size: 0.72rem; padding: 12px; border-radius: var(--radius-sm); word-break: break-all; text-align: left; line-height: 1.6;">
                                     ${detailsHtml}
                                 </div>
                             </div>
@@ -2114,15 +2118,11 @@ document.addEventListener('DOMContentLoaded', () => {
         addMetadataBtn.addEventListener('click', () => {
             const row = document.createElement('div');
             row.className = 'metadata-row';
-            row.style.display = 'flex';
-            row.style.gap = '8px';
-            row.style.alignItems = 'center';
-            row.style.animation = 'fadeIn 0.2s ease';
             
             row.innerHTML = `
-                <input type="text" class="metadata-key" placeholder="Key" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
-                <input type="text" class="metadata-value" placeholder="Value" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
-                <button type="button" class="btn-remove-row" style="background: none; border: none; color: var(--error); font-size: 1.25rem; cursor: pointer; padding: 0 4px; line-height: 1;">×</button>
+                <input type="text" class="metadata-key mono-input" placeholder="Key">
+                <input type="text" class="metadata-value mono-input" placeholder="Value">
+                <button type="button" class="btn-remove-row" title="Remove field">×</button>
             `;
             
             const removeBtn = row.querySelector('.btn-remove-row');
@@ -2148,6 +2148,69 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
+    // Persistent UI Theme Switcher (Dark Nordic / Light / Color) + Mono Logs Toggle
+    const UI_THEME_STORAGE_KEY = 'psp_sandbox_ui_theme_v1';
+    const VALID_UI_THEMES = ['nordic', 'light', 'color'];
+    const themeBtns = document.querySelectorAll('#ui-theme-switcher .ui-theme-btn');
+
+    const applyUiTheme = (themeName, persist = true) => {
+        const resolved = VALID_UI_THEMES.includes(themeName) ? themeName : 'nordic';
+        document.documentElement.setAttribute('data-ui-theme', resolved);
+        if (document.body) {
+            document.body.setAttribute('data-ui-theme', resolved);
+        }
+        themeBtns.forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.theme === resolved);
+        });
+        if (persist) {
+            try {
+                localStorage.setItem(UI_THEME_STORAGE_KEY, resolved);
+            } catch (e) {}
+        }
+    };
+
+    try {
+        const savedUiTheme = localStorage.getItem(UI_THEME_STORAGE_KEY);
+        applyUiTheme(savedUiTheme || 'nordic', false);
+    } catch (e) {
+        applyUiTheme('nordic', false);
+    }
+
+    themeBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const targetTheme = btn.dataset.theme;
+            applyUiTheme(targetTheme, true);
+        });
+    });
+
+    window.addEventListener('storage', (e) => {
+        if (e.key === UI_THEME_STORAGE_KEY && e.newValue) {
+            applyUiTheme(e.newValue, false);
+        }
+    });
+
+    const MONO_LOGS_STORAGE_KEY = 'psp_sandbox_mono_logs_v1';
+    const monoLogsBtn = document.getElementById('btn-mono-logs');
+
+    if (monoLogsBtn && logsContainer) {
+        const applyMonoLogs = (isMono) => {
+            logsContainer.classList.toggle('logs-mono', isMono);
+            monoLogsBtn.classList.toggle('active', isMono);
+            monoLogsBtn.textContent = isMono ? 'Mono Logs: ON' : 'Mono Logs';
+            try {
+                localStorage.setItem(MONO_LOGS_STORAGE_KEY, isMono ? '1' : '0');
+            } catch (e) {}
+        };
+        try {
+            if (localStorage.getItem(MONO_LOGS_STORAGE_KEY) === '1') {
+                applyMonoLogs(true);
+            }
+        } catch (e) {}
+        monoLogsBtn.addEventListener('click', () => {
+            applyMonoLogs(!logsContainer.classList.contains('logs-mono'));
+        });
+    }
+
     // Logs Toolbar Actions: Clear, Copy All, Fold Payloads, New Tab, Expand Height, Fullscreen Modal
     const foldAllPayloadsBtn = document.getElementById('btn-fold-all-payloads');
     const openLogsNewTabBtn = document.getElementById('btn-open-logs-new-tab');
@@ -2160,10 +2223,10 @@ document.addEventListener('DOMContentLoaded', () => {
             payloadEntries.forEach(entry => {
                 entry.classList.toggle('entry-collapsed', allPayloadsFolded);
                 const foldLineBtn = entry.querySelector('.log-fold-line-btn');
-                if (foldLineBtn) foldLineBtn.textContent = allPayloadsFolded ? '➕ Unfold Line' : '➖ Fold Line';
+                if (foldLineBtn) foldLineBtn.textContent = allPayloadsFolded ? 'Unfold Line' : 'Fold Line';
             });
             foldAllPayloadsBtn.classList.toggle('active', allPayloadsFolded);
-            foldAllPayloadsBtn.textContent = allPayloadsFolded ? '🔼 Unfold Payloads' : '🔽 Fold Payloads';
+            foldAllPayloadsBtn.textContent = allPayloadsFolded ? 'Unfold Payloads' : 'Fold Payloads';
         });
     }
 
@@ -2190,7 +2253,7 @@ document.addEventListener('DOMContentLoaded', () => {
         copyAllLogsBtn.addEventListener('click', () => {
             if (allLogGroups.length === 0) return;
             const fullText = allLogGroups.map(g => formatGroupForClipboard(g)).join('\n\n' + '='.repeat(60) + '\n\n');
-            copyTextWithFeedback(fullText, copyAllLogsBtn, '📋 Copy All', '✅ All Copied!');
+            copyTextWithFeedback(fullText, copyAllLogsBtn, 'Copy All', 'All Copied');
         });
     }
 
@@ -2199,7 +2262,7 @@ document.addEventListener('DOMContentLoaded', () => {
             logsContainer.style.height = ''; // Reset manual drag height if any
             const isExpanded = logsContainer.classList.toggle('logs-expanded');
             expandLogsBtn.classList.toggle('active', isExpanded);
-            expandLogsBtn.textContent = isExpanded ? '↕️ Default Size' : '↕️ Taller';
+            expandLogsBtn.textContent = isExpanded ? 'Default Height' : 'Taller';
         });
     }
 
@@ -2220,7 +2283,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (logsBackdrop) logsBackdrop.classList.toggle('active', willBeFullscreen);
         if (fullscreenLogsBtn) {
             fullscreenLogsBtn.classList.toggle('active', willBeFullscreen);
-            fullscreenLogsBtn.textContent = willBeFullscreen ? '✕ Exit Fullscreen' : '⛶ Maximize';
+            fullscreenLogsBtn.textContent = willBeFullscreen ? 'Exit Fullscreen' : 'Maximize';
         }
     };
 
@@ -2400,7 +2463,7 @@ function loadLocalCallbackStateFromStorage() {
 }
 
 function updateCallbackStepper(stepNum, state = 'active') {
-    for (let i = 1; i <= 4; i++) {
+    for (let i = 1; i <= 5; i++) {
         const el = document.getElementById(`cb-step-${i}`);
         if (!el) continue;
         if (i < stepNum) {
@@ -2484,13 +2547,10 @@ function syncLocalCallbackToMainForm() {
         }
         const row = document.createElement('div');
         row.className = 'metadata-row';
-        row.style.display = 'flex';
-        row.style.gap = '8px';
-        row.style.alignItems = 'center';
         row.innerHTML = `
-            <input type="text" class="metadata-key" value="${key}" placeholder="Key" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
-            <input type="text" class="metadata-value" value="${value}" placeholder="Value" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
-            <button type="button" class="btn-remove-row" style="background: none; border: none; color: var(--error); font-size: 1.25rem; cursor: pointer; padding: 0 4px; line-height: 1;">×</button>
+            <input type="text" class="metadata-key mono-input" value="${key}" placeholder="Key">
+            <input type="text" class="metadata-value mono-input" value="${value}" placeholder="Value">
+            <button type="button" class="btn-remove-row" title="Remove field">×</button>
         `;
         const removeBtn = row.querySelector('.btn-remove-row');
         if (removeBtn) {
@@ -2537,7 +2597,7 @@ async function discoverAndAutoFillFromLocalDb(runCheckAfter = true) {
     const cfg = getLocalCallbackConfigObject();
     if (btnAutofill) {
         btnAutofill.disabled = true;
-        btnAutofill.textContent = '⏳ Discovering local DB...';
+        btnAutofill.textContent = 'Discovering local DB...';
     }
 
     try {
@@ -2586,7 +2646,7 @@ async function discoverAndAutoFillFromLocalDb(runCheckAfter = true) {
                 opt.value = p.customUuid;
                 opt.dataset.type = 'passenger';
                 opt.dataset.passengerUuid = p.customUuid;
-                opt.textContent = `👤 ${p.label} → ${p.customUuid.slice(0, 8)}…`;
+                opt.textContent = `[PASSENGER] ${p.label} → ${p.customUuid.slice(0, 8)}…`;
                 cbEntitySelect.appendChild(opt);
             });
             localDiscoveredDbEntities.carts.forEach(c => {
@@ -2594,7 +2654,7 @@ async function discoverAndAutoFillFromLocalDb(runCheckAfter = true) {
                 opt.value = c.customUuid;
                 opt.dataset.type = 'cart';
                 opt.dataset.passengerUuid = c.passengerCustomUuid || '';
-                opt.textContent = `🛒 Cart #${c.id} (${c.status}, Passenger #${c.passengerAccountId}) → ${c.customUuid.slice(0, 8)}…`;
+                opt.textContent = `[CART] #${c.id} (${c.status}, Passenger #${c.passengerAccountId}) → ${c.customUuid.slice(0, 8)}…`;
                 cbEntitySelect.appendChild(opt);
             });
         }
@@ -2633,7 +2693,7 @@ async function discoverAndAutoFillFromLocalDb(runCheckAfter = true) {
     } finally {
         if (btnAutofill) {
             btnAutofill.disabled = false;
-            btnAutofill.textContent = '⚡ Auto-Fill from Local DB';
+            btnAutofill.textContent = 'Auto-Fill from Local DB';
         }
     }
 }
@@ -2646,7 +2706,7 @@ async function runLocalCallbackPreflightChecks() {
 
     if (btnPreflight) {
         btnPreflight.disabled = true;
-        btnPreflight.textContent = '⏳ Running Checks...';
+        btnPreflight.textContent = 'Running Checks...';
     }
     if (resultsContainer) {
         resultsContainer.classList.remove('hidden');
@@ -2677,7 +2737,7 @@ async function runLocalCallbackPreflightChecks() {
 
         if (resultsContainer && Array.isArray(data.checks)) {
             resultsContainer.innerHTML = data.checks.map(chk => {
-                const icon = chk.status === 'ok' ? '✅' : (chk.status === 'warn' ? '⚠️' : '❌');
+                const icon = chk.status === 'ok' ? '[OK]' : (chk.status === 'warn' ? '[WARN]' : '[ERR]');
                 let fixBtnHtml = '';
                 if (chk.fixAction) {
                     fixBtnHtml = `<button type="button" class="btn-preflight-fix" data-fix='${JSON.stringify(chk.fixAction).replace(/'/g, "&#39;")}'>${chk.fixAction.label}</button>`;
@@ -2701,19 +2761,19 @@ async function runLocalCallbackPreflightChecks() {
         }
         updateCompactCallbackSummaryPills(data);
 
-        updateCallbackStepper(1, data.allPassed ? 'done' : 'active');
+        updateCallbackStepper(4, data.allPassed ? 'done' : 'active');
         log(`[Local Callback Pre-Flight] Completed (${data.allPassed ? 'ALL PASSED' : 'Action Recommended'})`, data.allPassed ? 'success' : 'system', data);
         return data;
     } catch (err) {
         if (resultsContainer) {
-            resultsContainer.innerHTML = `<div class="preflight-check-item status-error"><span class="preflight-check-icon">❌</span><div class="preflight-check-body"><div class="preflight-check-label">Pre-Flight Error</div><div class="preflight-check-detail">${err.message}</div></div></div>`;
+            resultsContainer.innerHTML = `<div class="preflight-check-item status-error"><span class="preflight-check-icon">[ERR]</span><div class="preflight-check-body"><div class="preflight-check-label">Pre-Flight Error</div><div class="preflight-check-detail">${err.message}</div></div></div>`;
         }
         log(`[Local Callback Pre-Flight Error] ${err.message}`, 'error');
         return null;
     } finally {
         if (btnPreflight) {
             btnPreflight.disabled = false;
-            btnPreflight.textContent = '🩺 Run Pre-Flight Checks';
+            btnPreflight.textContent = 'Run Pre-Flight Checks';
         }
     }
 }
@@ -2735,9 +2795,9 @@ async function forwardLocalCallbackToBackend(options = {}) {
 
     if (btnForward) {
         btnForward.disabled = true;
-        btnForward.textContent = `⏳ Forwarding ${pspId.toUpperCase()} Callback to Local Backend...`;
+        btnForward.textContent = `Forwarding ${pspId.toUpperCase()} Callback to Local Backend...`;
     }
-    updateCallbackStepper(3, 'active');
+    updateCallbackStepper(5, 'active');
 
     log(`[Local Callback] Forwarding ${pspId.toUpperCase()} callback (${options.autoTriggered ? 'AUTO' : 'MANUAL'}) to /billing/payment/callback/${cfg.customerShortname}...`, 'system', cfg);
 
@@ -2758,8 +2818,7 @@ async function forwardLocalCallbackToBackend(options = {}) {
 
         const statusCode = data.callbackResponse?.statusCode || 500;
         const isSuccess = Boolean(data.ok && statusCode >= 200 && statusCode < 300);
-        updateCallbackStepper(3, isSuccess ? 'done' : 'active');
-        updateCallbackStepper(4, isSuccess ? 'done' : 'active');
+        updateCallbackStepper(5, isSuccess ? 'done' : 'active');
 
         if (resultCard) {
             resultCard.classList.remove('hidden');
@@ -2774,14 +2833,14 @@ async function forwardLocalCallbackToBackend(options = {}) {
 
             resultCard.innerHTML = `
                 <div class="persistence-title">
-                    <span>${isSuccess ? '✅ Local Callback Forwarded & Persisted in DB' : `⚠️ Callback Returned HTTP ${statusCode}`}</span>
+                    <span>${isSuccess ? '[OK] Local Callback Forwarded & Persisted in DB' : `[WARN] Callback Returned HTTP ${statusCode}`}</span>
                     <span style="font-family: var(--font-mono); font-size: 0.68rem;">HTTP ${statusCode} (${data.targetContainer})</span>
                 </div>
                 <div class="persistence-row"><strong>Endpoint:</strong> <code>POST ${data.callbackRequest?.url}</code></div>
                 <div class="persistence-row"><strong>Auth Header:</strong> <code>${pspId === 'moneris' ? 'X-Payment-Provider: moneris + Bearer JWT' : `Event-Signature: ${sigHeader.slice(0, 24)}…`}</code></div>
                 ${data.consumerResult ? `<div class="persistence-row"><strong>Messenger Queue:</strong> Consumed <code>billing_sale_transport</code> (${data.consumerResult.ok ? 'OK' : 'Warning'})</div>` : ''}
-                ${latestToken ? `<div class="persistence-row"><strong>Card Token in DB (<code>fare_payment_tokens</code>):</strong> <code>#${latestToken.id}</code> | token=<code>${latestToken.token}</code> | label=<code>${latestToken.label}</code> | provider=<code>${latestToken.paymentProviderName}</code> | passenger=<code>#${latestToken.passengerAccountId}</code> ${newTokens.length > 0 ? '<span style="color:#276749;font-weight:700;">(NEW!)</span>' : ''}</div>` : ''}
-                ${latestSale ? `<div class="persistence-row"><strong>Sale in DB (<code>fare_sales</code>):</strong> <code>#${latestSale.id}</code> | status=<code>${latestSale.status}</code> | ref=<code>${latestSale.reference || latestSale.transactionId}</code> ${newSales.length > 0 ? '<span style="color:#276749;font-weight:700;">(NEW!)</span>' : ''}</div>` : ''}
+                ${latestToken ? `<div class="persistence-row"><strong>Card Token in DB (<code>fare_payment_tokens</code>):</strong> <code>#${latestToken.id}</code> | token=<code>${latestToken.token}</code> | label=<code>${latestToken.label}</code> | provider=<code>${latestToken.paymentProviderName}</code> | passenger=<code>#${latestToken.passengerAccountId}</code> ${newTokens.length > 0 ? '<span style="color:var(--status-ok-text);font-weight:700;">(NEW)</span>' : ''}</div>` : ''}
+                ${latestSale ? `<div class="persistence-row"><strong>Sale in DB (<code>fare_sales</code>):</strong> <code>#${latestSale.id}</code> | status=<code>${latestSale.status}</code> | ref=<code>${latestSale.reference || latestSale.transactionId}</code> ${newSales.length > 0 ? '<span style="color:var(--status-ok-text);font-weight:700;">(NEW)</span>' : ''}</div>` : ''}
                 ${cartRow ? `<div class="persistence-row"><strong>ShoppingCart (<code>#${cartRow.id}</code>):</strong> status=<code>${cartRow.status}</code> | updated=<code>${cartRow.updatedAt}</code></div>` : ''}
             `;
         }
@@ -2791,14 +2850,14 @@ async function forwardLocalCallbackToBackend(options = {}) {
     } catch (err) {
         if (resultCard) {
             resultCard.classList.remove('hidden');
-            resultCard.innerHTML = `<div class="persistence-title" style="color: var(--error);">❌ Callback Forwarding Failed: ${err.message}</div>`;
+            resultCard.innerHTML = `<div class="persistence-title" style="color: var(--status-err-text);">[ERR] Callback Forwarding Failed: ${err.message}</div>`;
         }
         log(`[Local Callback Error] ${err.message}`, 'error');
         return null;
     } finally {
         if (btnForward) {
             btnForward.disabled = false;
-            btnForward.textContent = '🚀 Forward / Replay Callback to Local Server Now';
+            btnForward.textContent = 'Forward / Replay Callback to Local Server Now';
         }
     }
 }
@@ -2844,13 +2903,13 @@ function updateCompactCallbackSummaryPills(preflightData = null) {
         preflightPill.classList.remove('health-ok', 'health-warn', 'health-error');
         if (preflightData.overallStatus === 'ok') {
             preflightPill.classList.add('health-ok');
-            preflightPill.innerHTML = `Pre-Flight: <strong>${passedCount}/${totalCount} OK ✅</strong>`;
+            preflightPill.innerHTML = `Pre-Flight: <strong>${passedCount}/${totalCount} OK</strong>`;
         } else if (preflightData.overallStatus === 'warn') {
             preflightPill.classList.add('health-warn');
-            preflightPill.innerHTML = `Pre-Flight: <strong>${passedCount}/${totalCount} WARN ⚠️</strong>`;
+            preflightPill.innerHTML = `Pre-Flight: <strong>${passedCount}/${totalCount} WARN</strong>`;
         } else {
             preflightPill.classList.add('health-error');
-            preflightPill.innerHTML = `Pre-Flight: <strong>${passedCount}/${totalCount} ERR ❌</strong>`;
+            preflightPill.innerHTML = `Pre-Flight: <strong>${passedCount}/${totalCount} ERR</strong>`;
         }
     }
 
@@ -2972,6 +3031,27 @@ function setupLocalCallbackPanel() {
     }
     if (btnForwardNow) {
         btnForwardNow.addEventListener('click', () => forwardLocalCallbackToBackend({ autoTriggered: false }));
+    }
+
+    // Interactive Stepper Click -> Focus & Highlight Section Card (01..05)
+    const stepperEl = document.getElementById('local-cb-stepper');
+    if (stepperEl) {
+        stepperEl.querySelectorAll('.local-cb-step').forEach(stepItem => {
+            stepItem.addEventListener('click', () => {
+                const targetId = stepItem.dataset.targetCard;
+                const stepNum = parseInt(stepItem.dataset.step || '1', 10);
+                if (stepNum) {
+                    updateCallbackStepper(stepNum, 'active');
+                }
+                document.querySelectorAll('.local-cb-section-card.step-highlighted').forEach(c => c.classList.remove('step-highlighted'));
+                const targetCard = targetId ? document.getElementById(targetId) : null;
+                if (targetCard) {
+                    targetCard.classList.add('step-highlighted');
+                    targetCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    setTimeout(() => targetCard.classList.remove('step-highlighted'), 1600);
+                }
+            });
+        });
     }
 
     if (cbPaymentContext) {
@@ -3193,6 +3273,28 @@ function setupLocalCallbackPanel() {
 // =========================================================================
 let cachedMonerisServerConfig = null;
 
+const DEFAULT_MONERIS_PROFILES_BY_ALIAS = {
+    save_card_light: 'chktCFAGT15557',
+    save_card_dark: 'chktCFAGT15557',
+    payment_with_save_card_light: 'chktTHANC15557',
+    payment_with_save_card_dark: 'chktTHANC15557',
+    payment_without_save_card_light: 'chktRGSK815557',
+    payment_without_save_card_dark: 'chktRGSK815557'
+};
+
+function resolveCheckoutIdForAlias(alias, serverMonerisConfig = null) {
+    const profiles = serverMonerisConfig?.checkoutProfiles || {};
+    if (alias && alias !== 'all') {
+        if (profiles[alias] && profiles[alias] !== 'FILLME') {
+            return profiles[alias];
+        }
+        if (DEFAULT_MONERIS_PROFILES_BY_ALIAS[alias]) {
+            return DEFAULT_MONERIS_PROFILES_BY_ALIAS[alias];
+        }
+    }
+    return serverMonerisConfig?.checkoutId || DEFAULT_MONERIS_PROFILES_BY_ALIAS.save_card_light;
+}
+
 async function fetchServerAndMonerisConfig(silent = false) {
     try {
         const res = await fetch('/api/config?t=' + Date.now());
@@ -3213,13 +3315,8 @@ async function fetchServerAndMonerisConfig(silent = false) {
         }
 
         if (checkoutIdInput && data.moneris) {
-            const alias = aliasSelect ? aliasSelect.value : 'all';
-            const profiles = data.moneris.checkoutProfiles || {};
-            if (alias !== 'all' && profiles[alias]) {
-                checkoutIdInput.value = profiles[alias];
-            } else if (data.moneris.checkoutId) {
-                checkoutIdInput.value = data.moneris.checkoutId;
-            }
+            const alias = aliasSelect ? aliasSelect.value : 'save_card_light';
+            checkoutIdInput.value = resolveCheckoutIdForAlias(alias, data.moneris);
         }
 
         if (!silent) {
@@ -3272,18 +3369,18 @@ async function applyMonerisProfileAndRestart({ restartOnly = false } = {}) {
     const syncLocalDb = syncDbCheckbox ? Boolean(syncDbCheckbox.checked) : true;
 
     if (!restartOnly && !checkoutId) {
-        setMonerisProfileBanner('❌ Please enter a valid Moneris <code>checkout_id</code>.', 'status-error');
+        setMonerisProfileBanner('[ERR] Please enter a valid Moneris <code>checkout_id</code>.', 'status-error');
         return;
     }
 
     const buttons = [btnSaveRestart, btnRestartOnly, btnHeaderRestart].filter(Boolean);
     buttons.forEach(b => { b.disabled = true; });
-    if (btnHeaderRestart) btnHeaderRestart.innerHTML = '<span>⏳ Restarting...</span>';
+    if (btnHeaderRestart) btnHeaderRestart.innerHTML = '<span>Restarting...</span>';
 
     setMonerisProfileBanner(
         restartOnly
-            ? '⏳ Restarting Sandbox Server & reloading <code>env.local.json</code>...'
-            : `⏳ Saving <code>${checkoutId}</code> (${alias}) to <code>env.local.json</code>${syncLocalDb ? ' + local PostgreSQL' : ''} & restarting server...`,
+            ? 'Restarting Sandbox Server & reloading <code>env.local.json</code>...'
+            : `Saving <code>${checkoutId}</code> (${alias}) to <code>env.local.json</code>${syncLocalDb ? ' + local PostgreSQL' : ''} & restarting server...`,
         'status-restarting'
     );
 
@@ -3321,7 +3418,7 @@ async function applyMonerisProfileAndRestart({ restartOnly = false } = {}) {
         const activeChkId = newServerData?.moneris?.checkoutId || checkoutId;
 
         setMonerisProfileBanner(
-            `✅ Server restarted (PID <code>${previousPid || '?'}</code> → <code>${newPid}</code>) • Active <code>checkout_id</code>: <strong>${activeChkId}</strong>${!restartOnly && syncLocalDb ? (dbSyncOk ? ' • Local DB <code>fare_merchants</code> synced ✅' : '') : ''}`,
+            `[OK] Server restarted (PID <code>${previousPid || '?'}</code> → <code>${newPid}</code>) • Active <code>checkout_id</code>: <strong>${activeChkId}</strong>${!restartOnly && syncLocalDb ? (dbSyncOk ? ' • Local DB <code>fare_merchants</code> synced' : '') : ''}`,
             'status-ok'
         );
 
@@ -3333,11 +3430,60 @@ async function applyMonerisProfileAndRestart({ restartOnly = false } = {}) {
             newServerData
         );
     } catch (err) {
-        setMonerisProfileBanner(`❌ Error: ${err.message}`, 'status-error');
+        setMonerisProfileBanner(`[ERR] Error: ${err.message}`, 'status-error');
         log(`[Moneris Profile / Server Restart Error] ${err.message}`, 'error');
     } finally {
         buttons.forEach(b => { b.disabled = false; });
-        if (btnHeaderRestart) btnHeaderRestart.innerHTML = '<span>⚡ Restart Server</span>';
+        if (btnHeaderRestart) btnHeaderRestart.innerHTML = '<span>Restart Server</span>';
+    }
+}
+
+function syncOrderFieldsWithMonerisProfile(alias, checkoutId) {
+    const isSaveCardProfile = (alias && alias.startsWith('save_card')) || checkoutId === 'chktCFAGT15557';
+    const isPaymentProfile = (alias && alias.startsWith('payment_')) || checkoutId === 'chktTHANC15557' || checkoutId === 'chktRGSK815557';
+    const amountEl = document.getElementById('orderAmount');
+
+    const updateMetadataPaymentContext = (newContext) => {
+        const rows = document.querySelectorAll('#metadata-rows-container .metadata-row');
+        rows.forEach(row => {
+            const keyInput = row.querySelector('.metadata-key');
+            const valInput = row.querySelector('.metadata-value');
+            if (keyInput && valInput && keyInput.value.trim() === 'payment_context') {
+                valInput.value = newContext;
+            }
+        });
+    };
+
+    if (isSaveCardProfile) {
+        if (amountEl) amountEl.value = '0';
+        updateMetadataPaymentContext('save_card');
+        const cbCtx = document.getElementById('cbPaymentContext');
+        if (cbCtx) {
+            cbCtx.value = 'save_card';
+            cbCtx.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        const cbShouldSave = document.getElementById('cbMonerisShouldSaveCard');
+        if (cbShouldSave) cbShouldSave.value = 'true';
+    } else if (isPaymentProfile) {
+        if (amountEl && (!amountEl.value.trim() || Number(amountEl.value) <= 0)) {
+            amountEl.value = '1000';
+        }
+        updateMetadataPaymentContext('cart');
+        const cbCtx = document.getElementById('cbPaymentContext');
+        if (cbCtx) {
+            cbCtx.value = 'cart';
+            cbCtx.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        const cbShouldSave = document.getElementById('cbMonerisShouldSaveCard');
+        if (cbShouldSave) {
+            cbShouldSave.value = (alias && alias.includes('without_save_card')) || checkoutId === 'chktRGSK815557' ? 'false' : 'true';
+        }
+    }
+    if (typeof updateCallbackSummaryPills === 'function') {
+        updateCallbackSummaryPills();
+    }
+    if (typeof runLocalCallbackPreflight === 'function') {
+        runLocalCallbackPreflight(true);
     }
 }
 
@@ -3352,12 +3498,13 @@ function setupMonerisProfileAndServerControl() {
 
     if (aliasSelect && checkoutIdInput) {
         aliasSelect.addEventListener('change', () => {
-            const profiles = cachedMonerisServerConfig?.moneris?.checkoutProfiles || {};
             const alias = aliasSelect.value;
-            if (alias !== 'all' && profiles[alias]) {
-                checkoutIdInput.value = profiles[alias];
-            } else if (cachedMonerisServerConfig?.moneris?.checkoutId) {
-                checkoutIdInput.value = cachedMonerisServerConfig.moneris.checkoutId;
+            const resolvedId = resolveCheckoutIdForAlias(alias, cachedMonerisServerConfig?.moneris);
+            checkoutIdInput.value = resolvedId;
+            syncOrderFieldsWithMonerisProfile(alias, resolvedId);
+            const cbProfileAlias = document.getElementById('cb-checkout-profile-alias');
+            if (cbProfileAlias && alias !== 'all') {
+                cbProfileAlias.value = alias;
             }
         });
     }
@@ -3367,6 +3514,7 @@ function setupMonerisProfileAndServerControl() {
             const presetId = btn.getAttribute('data-checkout-id');
             if (presetId && checkoutIdInput) {
                 checkoutIdInput.value = presetId;
+                syncOrderFieldsWithMonerisProfile(aliasSelect ? aliasSelect.value : '', presetId);
             }
         });
     });
