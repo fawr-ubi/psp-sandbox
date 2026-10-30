@@ -3,34 +3,51 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const url = require('url');
+const crypto = require('crypto');
+const { execFile, spawn } = require('child_process');
 
 const PORT = 8000;
+const SERVER_BOOT_TIME = new Date().toISOString();
 
-// Load default Environment Variables from env.json if present
-if (fs.existsSync('env.json')) {
-    try {
-        const envData = JSON.parse(fs.readFileSync('env.json', 'utf-8'));
-        for (const [key, val] of Object.entries(envData)) {
-            process.env[key] = val;
+const MONERIS_PROFILE_ALIASES = [
+    'save_card_light',
+    'save_card_dark',
+    'payment_with_save_card_light',
+    'payment_with_save_card_dark',
+    'payment_without_save_card_light',
+    'payment_without_save_card_dark'
+];
+
+/**
+ * Loads or reloads env.json and env.local.json into process.env
+ */
+function loadEnvConfig() {
+    if (fs.existsSync('env.json')) {
+        try {
+            const envData = JSON.parse(fs.readFileSync('env.json', 'utf-8'));
+            for (const [key, val] of Object.entries(envData)) {
+                process.env[key] = typeof val === 'object' && val !== null ? JSON.stringify(val) : val;
+            }
+            console.log(`[Config] Loaded default variables from env.json.`);
+        } catch (e) {
+            console.warn(`[Config] Failed to parse env.json:`, e.message);
         }
-        console.log(`[Config] Loaded default variables from env.json.`);
-    } catch (e) {
-        console.warn(`[Config] Failed to parse env.json:`, e.message);
+    }
+
+    if (fs.existsSync('env.local.json')) {
+        try {
+            const envLocalData = JSON.parse(fs.readFileSync('env.local.json', 'utf-8'));
+            for (const [key, val] of Object.entries(envLocalData)) {
+                process.env[key] = typeof val === 'object' && val !== null ? JSON.stringify(val) : val;
+            }
+            console.log(`[Config] Loaded secure overrides from env.local.json successfully.`);
+        } catch (e) {
+            console.warn(`[Config] Failed to parse env.local.json:`, e.message);
+        }
     }
 }
 
-// Load secure local overrides from env.local.json if present
-if (fs.existsSync('env.local.json')) {
-    try {
-        const envLocalData = JSON.parse(fs.readFileSync('env.local.json', 'utf-8'));
-        for (const [key, val] of Object.entries(envLocalData)) {
-            process.env[key] = val;
-        }
-        console.log(`[Config] Loaded secure overrides from env.local.json successfully.`);
-    } catch (e) {
-        console.warn(`[Config] Failed to parse env.local.json:`, e.message);
-    }
-}
+loadEnvConfig();
 
 /**
  * Helper to log and send JSON response from local server
@@ -130,6 +147,118 @@ function parseMonerisXmlReceipt(xmlStr) {
     return result;
 }
 
+function getMonerisCheckoutProfilesMap() {
+    let profiles = {};
+    if (process.env.MONERIS_CHECKOUT_PROFILES) {
+        try {
+            const parsed = typeof process.env.MONERIS_CHECKOUT_PROFILES === 'string'
+                ? JSON.parse(process.env.MONERIS_CHECKOUT_PROFILES)
+                : process.env.MONERIS_CHECKOUT_PROFILES;
+            if (parsed && typeof parsed === 'object') {
+                profiles = { ...parsed };
+            }
+        } catch (e) {
+            profiles = {};
+        }
+    }
+    const defaultId = (process.env.MONERIS_CHECKOUT_ID || '').trim();
+    for (const alias of MONERIS_PROFILE_ALIASES) {
+        if (!profiles[alias] || profiles[alias] === 'FILLME') {
+            profiles[alias] = defaultId;
+        }
+    }
+    return profiles;
+}
+
+function resolveMonerisAliasForContext(paymentContext = 'save_card', shouldSaveCard = true, darkMode = false) {
+    if (paymentContext === 'save_card') {
+        return darkMode ? 'save_card_dark' : 'save_card_light';
+    }
+    if (shouldSaveCard) {
+        return darkMode ? 'payment_with_save_card_dark' : 'payment_with_save_card_light';
+    }
+    return darkMode ? 'payment_without_save_card_dark' : 'payment_without_save_card_light';
+}
+
+/**
+ * Resolves the Moneris Checkout Profile ID from MONERIS_CHECKOUT_PROFILES or MONERIS_CHECKOUT_ID
+ */
+function resolveMonerisCheckoutId(paymentContext = 'save_card', shouldSaveCard = true, darkMode = false, explicitAlias = '') {
+    const profiles = getMonerisCheckoutProfilesMap();
+    const alias = (explicitAlias && explicitAlias !== 'auto' && MONERIS_PROFILE_ALIASES.includes(explicitAlias))
+        ? explicitAlias
+        : resolveMonerisAliasForContext(paymentContext, shouldSaveCard, darkMode);
+
+    if (profiles[alias] && profiles[alias] !== 'FILLME') {
+        return String(profiles[alias]).trim();
+    }
+    return (process.env.MONERIS_CHECKOUT_ID || '').trim();
+}
+
+function isUuidLike(val) {
+    return typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim());
+}
+
+function normalizePaymentContext(rawContext, rawCents) {
+    const lower = String(rawContext || '').trim().toLowerCase();
+    if (lower === 'save_card' || lower === 'mit-registration' || rawCents === 0) {
+        return 'save_card';
+    }
+    if (lower === 'cart' || lower === 'shopping_cart') {
+        return 'cart';
+    }
+    if (lower === 'ewallet_reload' || lower === 'ewallet') {
+        return 'ewallet_reload';
+    }
+    return 'cart';
+}
+
+function resolveValidDevLocalCustomerUuid(rawCustId) {
+    const trimmed = String(rawCustId || '').trim();
+    if (isUuidLike(trimmed)) {
+        return trimmed;
+    }
+    if (trimmed === '1') {
+        return '0cd00107-cae0-5003-a0e0-0c0002150000';
+    }
+    if (trimmed === '2891') {
+        return 'a705b2e0-00c0-5e01-a0da-0008c0001c80';
+    }
+    return 'c00002c2-e000-5e08-a01a-00da57b0c000'; // Passenger #2858
+}
+
+function resolveValidDevLocalReferenceUuid(paymentContext, rawRef, customerUuid) {
+    const trimmed = String(rawRef || '').trim();
+    if (isUuidLike(trimmed)) {
+        return trimmed;
+    }
+    if (paymentContext === 'save_card') {
+        return customerUuid;
+    }
+    if (paymentContext === 'ewallet_reload') {
+        return '0cd00a07-cae0-5103-a0e0-7cf002150000';
+    }
+    return '05e00070-c010-5c01-a20e-0c00001ad000'; // ShoppingCart #1
+}
+
+/**
+ * Generates a Moneris order_no matching wfwp-platform MonerisPaymentGateway::generateOrderNo()
+ * Uses 10-digit Unix seconds timestamp so total length is <= 50 chars when reference is a 36-char UUID.
+ */
+function buildMonerisOrderNo(paymentContext, reference) {
+    const tsSec = Math.floor(Date.now() / 1000);
+    if (paymentContext === 'save_card') {
+        return `SC_${crypto.randomUUID()}`;
+    }
+    if (paymentContext === 'cart' && reference) {
+        return `C_${reference}_${tsSec}`.slice(0, 50);
+    }
+    if (paymentContext === 'ewallet_reload' && reference) {
+        return `ER_${reference}_${tsSec}`.slice(0, 50);
+    }
+    return `ORDER-${Date.now()}`;
+}
+
 /**
  * Moneris Session Handler
  * Supports:
@@ -137,10 +266,34 @@ function parseMonerisXmlReceipt(xmlStr) {
  * - 'sdk': Moneris Checkout (MCO) Ticket Preload
  */
 async function handleMonerisSession(sessionParams, res) {
-    const { orderPayload, checkoutMethod } = sessionParams;
+    const { orderPayload, checkoutMethod, localCallback } = sessionParams;
+    const metadata = (orderPayload && orderPayload.metadata) || {};
+    const rawCents = orderPayload && orderPayload.charge && Number.isFinite(Number(orderPayload.charge.amount))
+        ? Number(orderPayload.charge.amount)
+        : 1000;
+    const rawPaymentContext = (localCallback && localCallback.paymentContext) || metadata.payment_context || '';
+    const paymentContext = normalizePaymentContext(rawPaymentContext, rawCents);
+    const rawCustId = (localCallback && localCallback.customerRef)
+        || (orderPayload && orderPayload.customer_ref)
+        || '';
+    const effectiveCustId = resolveValidDevLocalCustomerUuid(rawCustId);
+    const rawReference = (localCallback && localCallback.reference) || metadata.reference || '';
+    const reference = resolveValidDevLocalReferenceUuid(paymentContext, rawReference, effectiveCustId);
+    const shouldSaveCard = localCallback && typeof localCallback.shouldSaveCard === 'boolean'
+        ? localCallback.shouldSaveCard
+        : true;
+    const darkMode = Boolean(localCallback && localCallback.darkMode);
+
     const storeId = (process.env.MONERIS_STORE_ID || '').trim();
     const apiToken = (process.env.MONERIS_API_TOKEN || '').trim();
-    const checkoutId = (process.env.MONERIS_CHECKOUT_ID || '').trim();
+    const explicitAlias = (sessionParams.checkoutProfileAlias || (localCallback && localCallback.checkoutProfileAlias) || '').trim();
+    const explicitCheckoutId = (sessionParams.checkoutId || (localCallback && localCallback.checkoutId) || '').trim();
+    const resolvedAlias = (explicitAlias && explicitAlias !== 'auto')
+        ? explicitAlias
+        : resolveMonerisAliasForContext(paymentContext || 'save_card', shouldSaveCard, darkMode);
+    const checkoutId = (explicitCheckoutId && explicitCheckoutId !== 'FILLME')
+        ? explicitCheckoutId
+        : resolveMonerisCheckoutId(paymentContext || 'save_card', shouldSaveCard, darkMode, explicitAlias);
     const envMode = (process.env.MONERIS_ENV || 'qa').trim().toLowerCase();
 
     // -------------------------------------------------------------------------
@@ -190,14 +343,16 @@ async function handleMonerisSession(sessionParams, res) {
         return;
     }
 
-    const chargeAmount = orderPayload && orderPayload.charge ? (orderPayload.charge.amount / 100).toFixed(2) : '10.00';
-    const orderNo = `ORDER-${Date.now()}`;
+    const chargeAmount = (paymentContext === 'save_card' && rawCents === 0)
+        ? '0.00'
+        : (rawCents / 100).toFixed(2);
+    const orderNo = buildMonerisOrderNo(paymentContext, reference);
 
     const mcoUrl = envMode === 'prod'
         ? 'https://gateway.moneris.com/chktv2/request/request.php'
         : 'https://gatewayt.moneris.com/chktv2/request/request.php';
 
-    console.log(`[Proxy Moneris] Initiating MCO Preload for Store: ${storeId}, Order: ${orderNo}, Amount: ${chargeAmount}, Env: ${envMode} (${mcoUrl})...`);
+    console.log(`[Proxy Moneris] Initiating MCO Preload for Store: ${storeId}, Checkout: ${checkoutId}, Order: ${orderNo}, Amount: ${chargeAmount}, CustId: ${effectiveCustId}, Env: ${envMode} (${mcoUrl})...`);
 
     const preloadPayload = {
         store_id: storeId,
@@ -206,15 +361,12 @@ async function handleMonerisSession(sessionParams, res) {
         environment: envMode,
         action: 'preload',
         txn_total: chargeAmount,
-        order_no: orderNo
+        order_no: orderNo,
+        cust_id: String(effectiveCustId)
     };
 
     if (orderPayload && orderPayload.token) {
         preloadPayload.token = orderPayload.token;
-    }
-
-    if (orderPayload && orderPayload.customer_ref) {
-        preloadPayload.cust_id = String(orderPayload.customer_ref);
     }
 
     const mcoRes = await makeHttpsRequest(
@@ -240,7 +392,10 @@ async function handleMonerisSession(sessionParams, res) {
             checkoutMethod: 'sdk',
             ticket: parsedData.response.ticket,
             environment: envMode,
-            order_no: orderNo
+            order_no: orderNo,
+            checkout_id: checkoutId,
+            checkout_profile_alias: resolvedAlias,
+            cust_id: preloadPayload.cust_id || null
         }, 'handleMonerisSession (MCO Preload)');
     } else {
         const errDetail = parsedData && parsedData.response && parsedData.response.error
@@ -886,6 +1041,54 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    function scheduleSandboxServerRestart(reason = 'User requested restart from Sandbox UI') {
+    console.log(`\n============================================================`);
+    console.log(`[Server Restart] Scheduling clean sandbox server restart (${reason})...`);
+    console.log(`[Server Restart] Old PID: ${process.pid}`);
+    console.log(`============================================================\n`);
+
+    setTimeout(() => {
+        server.close(() => {
+            console.log(`[Server Restart] Port ${PORT} released by PID ${process.pid}. Spawning new server.js instance...`);
+            let outFd = 'ignore';
+            let errFd = 'ignore';
+            try {
+                outFd = fs.openSync('/tmp/psp-sandbox.log', 'a');
+                errFd = fs.openSync('/tmp/psp-sandbox.log', 'a');
+            } catch (e) {
+                outFd = 'ignore';
+                errFd = 'ignore';
+            }
+
+            const child = spawn(process.execPath, [path.join(__dirname, 'server.js')], {
+                cwd: __dirname,
+                detached: true,
+                stdio: ['ignore', outFd, errFd]
+            });
+            child.unref();
+            process.exit(0);
+        });
+
+        // Fallback in case keep-alive sockets delay server.close()
+        setTimeout(() => {
+            try {
+                let outFd = 'ignore';
+                let errFd = 'ignore';
+                try {
+                    outFd = fs.openSync('/tmp/psp-sandbox.log', 'a');
+                    errFd = fs.openSync('/tmp/psp-sandbox.log', 'a');
+                } catch (e) {}
+                const child = spawn(process.execPath, [path.join(__dirname, 'server.js')], {
+                    cwd: __dirname,
+                    detached: true,
+                    stdio: ['ignore', outFd, errFd]
+                });
+                child.unref();
+            } catch (e) {}
+            process.exit(0);
+        }, 400);
+    }, 150);
+}
     // Route: Configuration Info for Frontend
     if (req.method === 'GET' && pathname === '/api/config') {
         console.log(`\n============================================================`);
@@ -893,10 +1096,152 @@ const server = http.createServer((req, res) => {
         console.log(`============================================================\n`);
 
         sendJsonResponse(res, 200, {
+            server: {
+                pid: process.pid,
+                bootTime: SERVER_BOOT_TIME,
+                uptimeSeconds: Math.round(process.uptime())
+            },
             moneris: {
-                environment: process.env.MONERIS_ENV || 'qa'
+                environment: process.env.MONERIS_ENV || 'qa',
+                storeId: process.env.MONERIS_STORE_ID || '',
+                checkoutId: (process.env.MONERIS_CHECKOUT_ID || '').trim() || resolveMonerisCheckoutId('save_card', true, false),
+                checkoutProfiles: getMonerisCheckoutProfilesMap(),
+                aliases: MONERIS_PROFILE_ALIASES
             }
         }, 'GET /api/config');
+        return;
+    }
+
+    // Route: Update Moneris Checkout Profile & Optionally Restart Server
+    if (req.method === 'POST' && pathname === '/api/moneris/config') {
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk;
+        });
+
+        req.on('end', async () => {
+            console.log(`\n============================================================`);
+            console.log(`[Incoming Request] POST /api/moneris/config`);
+            console.log(`[Request Payload]:\n${body}`);
+            console.log(`============================================================\n`);
+
+            try {
+                const payload = body ? JSON.parse(body) : {};
+                const checkoutId = (payload.checkoutId || '').trim();
+                const targetAlias = (payload.alias || 'all').trim();
+                const customProfiles = (payload.checkoutProfiles && typeof payload.checkoutProfiles === 'object')
+                    ? payload.checkoutProfiles
+                    : null;
+                const syncLocalDb = payload.syncLocalDb !== false;
+                const restartServer = Boolean(payload.restartServer);
+
+                let envLocal = {};
+                if (fs.existsSync('env.local.json')) {
+                    try {
+                        envLocal = JSON.parse(fs.readFileSync('env.local.json', 'utf-8'));
+                    } catch (e) {
+                        envLocal = {};
+                    }
+                }
+
+                const currentProfiles = getMonerisCheckoutProfilesMap();
+                let updatedProfiles = { ...currentProfiles };
+
+                if (customProfiles) {
+                    for (const alias of MONERIS_PROFILE_ALIASES) {
+                        if (customProfiles[alias] && String(customProfiles[alias]).trim()) {
+                            updatedProfiles[alias] = String(customProfiles[alias]).trim();
+                        }
+                    }
+                }
+
+                if (checkoutId) {
+                    if (targetAlias === 'all' || targetAlias === 'auto' || !MONERIS_PROFILE_ALIASES.includes(targetAlias)) {
+                        envLocal.MONERIS_CHECKOUT_ID = checkoutId;
+                        for (const alias of MONERIS_PROFILE_ALIASES) {
+                            updatedProfiles[alias] = checkoutId;
+                        }
+                    } else {
+                        updatedProfiles[targetAlias] = checkoutId;
+                        if (!envLocal.MONERIS_CHECKOUT_ID) {
+                            envLocal.MONERIS_CHECKOUT_ID = checkoutId;
+                        }
+                    }
+                }
+
+                if (payload.storeId && String(payload.storeId).trim()) {
+                    envLocal.MONERIS_STORE_ID = String(payload.storeId).trim();
+                }
+                if (payload.environment && String(payload.environment).trim()) {
+                    envLocal.MONERIS_ENV = String(payload.environment).trim().toLowerCase();
+                }
+
+                envLocal.MONERIS_CHECKOUT_PROFILES = updatedProfiles;
+
+                fs.writeFileSync('env.local.json', JSON.stringify(envLocal, null, 2) + '\n', 'utf-8');
+                loadEnvConfig();
+
+                let dbSyncResult = null;
+                if (syncLocalDb) {
+                    try {
+                        const dockerInfo = await inspectLocalDockerContainers();
+                        if (dockerInfo.dockerRunning) {
+                            const target = resolveTargetContainerAndUrl(dockerInfo, 'auto', 'moneris');
+                            dbSyncResult = await runLocalPhpBridge(target.containerName, {
+                                action: 'update_moneris_profiles',
+                                profilesMap: updatedProfiles
+                            });
+                        }
+                    } catch (dbErr) {
+                        dbSyncResult = { ok: false, error: dbErr.message };
+                    }
+                }
+
+                const responsePayload = {
+                    ok: true,
+                    restarting: restartServer,
+                    previousPid: process.pid,
+                    server: {
+                        pid: process.pid,
+                        bootTime: SERVER_BOOT_TIME
+                    },
+                    moneris: {
+                        environment: process.env.MONERIS_ENV || 'qa',
+                        storeId: process.env.MONERIS_STORE_ID || '',
+                        checkoutId: (process.env.MONERIS_CHECKOUT_ID || '').trim() || resolveMonerisCheckoutId('save_card', true, false),
+                        checkoutProfiles: getMonerisCheckoutProfilesMap()
+                    },
+                    dbSyncResult
+                };
+
+                sendJsonResponse(res, 200, responsePayload, 'POST /api/moneris/config');
+
+                if (restartServer) {
+                    scheduleSandboxServerRestart(`Moneris Checkout Profile updated to '${checkoutId || targetAlias}'`);
+                }
+            } catch (err) {
+                console.error('[Moneris Config Update Error]:', err);
+                sendJsonResponse(res, 500, { error: err.message }, 'POST /api/moneris/config Error');
+            }
+        });
+        return;
+    }
+
+    // Route: Restart Sandbox Server on Demand
+    if (req.method === 'POST' && pathname === '/api/server/restart') {
+        console.log(`\n============================================================`);
+        console.log(`[Incoming Request] POST /api/server/restart`);
+        console.log(`============================================================\n`);
+
+        loadEnvConfig();
+        sendJsonResponse(res, 200, {
+            ok: true,
+            restarting: true,
+            previousPid: process.pid,
+            message: 'Sandbox server is restarting and reloading env.local.json...'
+        }, 'POST /api/server/restart');
+
+        scheduleSandboxServerRestart('Manual restart triggered from UI');
         return;
     }
 

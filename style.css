@@ -1086,6 +1086,195 @@ input[type="color"]::-webkit-color-swatch {
 }
 
 /* =========================================================================
+   Moneris Checkout Profile & Sandbox Server Restart Controls
+   ========================================================================= */
+.header-restart-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 11px;
+    border-radius: 999px;
+    border: 1px solid #cbd5e0;
+    background-color: #ffffff;
+    color: #2d3748;
+    font-family: var(--font-heading);
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.18s ease;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.header-restart-btn:hover:not(:disabled) {
+    background-color: #fffaf0;
+    border-color: #dd6b20;
+    color: #c05621;
+    transform: translateY(-1px);
+}
+
+.header-restart-btn:disabled {
+    opacity: 0.65;
+    cursor: wait;
+}
+
+.moneris-profile-card {
+    border: 1px solid #cbd5e1;
+    border-radius: var(--radius-md);
+    background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+    padding: 13px 14px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+.moneris-profile-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.moneris-profile-title-wrap {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.moneris-profile-icon {
+    font-size: 1rem;
+    line-height: 1.2;
+}
+
+.moneris-profile-title {
+    font-family: var(--font-heading);
+    font-size: 0.84rem;
+    font-weight: 700;
+    color: #1e293b;
+}
+
+.moneris-profile-subtitle {
+    font-size: 0.71rem;
+    color: #64748b;
+    margin-top: 1px;
+}
+
+.moneris-pid-badge {
+    font-family: var(--font-mono);
+    font-size: 0.67rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background-color: #e2e8f0;
+    color: #334155;
+    white-space: nowrap;
+}
+
+.moneris-profile-presets {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.preset-label {
+    font-size: 0.71rem;
+    font-weight: 600;
+    color: #475569;
+}
+
+.btn-moneris-preset {
+    font-family: var(--font-mono);
+    font-size: 0.69rem;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid #93c5fd;
+    background-color: #eff6ff;
+    color: #1d4ed8;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.btn-moneris-preset:hover {
+    background-color: #dbeafe;
+    border-color: #3b82f6;
+}
+
+.moneris-profile-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.btn-moneris-save-restart {
+    flex: 1;
+    padding: 8px 12px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    border-radius: var(--radius-sm);
+    border: 1px solid #c05621;
+    background: linear-gradient(135deg, #ed8936 0%, #dd6b20 100%);
+    color: #ffffff;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.btn-moneris-save-restart:hover:not(:disabled) {
+    background: linear-gradient(135deg, #dd6b20 0%, #c05621 100%);
+}
+
+.btn-moneris-save-restart:disabled,
+.btn-moneris-restart-only:disabled {
+    opacity: 0.65;
+    cursor: wait;
+}
+
+.btn-moneris-restart-only {
+    padding: 8px 12px;
+    font-size: 0.76rem;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+    border: 1px solid #cbd5e1;
+    background-color: #ffffff;
+    color: #334155;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.btn-moneris-restart-only:hover:not(:disabled) {
+    background-color: #f1f5f9;
+    border-color: #94a3b8;
+}
+
+.moneris-profile-status {
+    margin-top: 8px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 0.73rem;
+    line-height: 1.4;
+    border: 1px solid #cbd5e1;
+    background-color: #f8fafc;
+    color: #334155;
+}
+
+.moneris-profile-status.status-ok {
+    background-color: #f0fdf4;
+    border-color: #86efac;
+    color: #166534;
+}
+
+.moneris-profile-status.status-restarting {
+    background-color: #fffbeb;
+    border-color: #fcd34d;
+    color: #92400e;
+}
+
+.moneris-profile-status.status-error {
+    background-color: #fef2f2;
+    border-color: #fca5a5;
+    color: #991b1b;
+}
+
+/* =========================================================================
    Line-by-Line Collapsible Log Entries & Standalone Logs View
    ========================================================================= */
 .log-entry-collapse-btn {

@@ -1713,6 +1713,14 @@ function updatePspUI() {
 
     log(`[System] Switched Payment Service Provider to ${psp.name}.`, 'system');
     updateCheckoutMethodUI();
+
+    const cbLittlepayFields = document.getElementById('cb-littlepay-fields');
+    const cbMonerisFields = document.getElementById('cb-moneris-fields');
+    const cbWindowPspChip = document.getElementById('cb-window-psp-chip');
+    if (cbLittlepayFields) cbLittlepayFields.style.display = psp.id === 'littlepay' ? 'block' : 'none';
+    if (cbMonerisFields) cbMonerisFields.style.display = psp.id === 'moneris' ? 'block' : 'none';
+    if (cbWindowPspChip) cbWindowPspChip.textContent = psp.id.toUpperCase();
+    syncLocalCallbackMerchantForPsp(psp.id);
 }
 
 /**
@@ -1721,7 +1729,12 @@ function updatePspUI() {
 function updateCheckoutMethodUI() {
     const psp = getSelectedPsp();
     const method = checkoutMethodSelect ? checkoutMethodSelect.value : psp.defaultMethod;
-    
+    const monerisProfileContainer = document.getElementById('moneris-profile-settings-container');
+
+    if (monerisProfileContainer) {
+        monerisProfileContainer.style.display = (psp.id === 'moneris' && method === 'sdk') ? 'block' : 'none';
+    }
+
     if (monerisVaultSettingsContainer) {
         monerisVaultSettingsContainer.style.display = (psp.id === 'moneris' && method === 'vault') ? 'block' : 'none';
         if (psp.id === 'moneris' && method === 'vault') {
@@ -1802,17 +1815,23 @@ async function createCheckoutSession() {
         });
     }
 
+    const monerisCheckoutIdInput = document.getElementById('monerisCheckoutIdInput');
+    const monerisProfileAliasSelect = document.getElementById('monerisProfileAliasSelect');
+
     const payload = {
         psp: psp.id,
         mitType: mitType,
         checkoutMethod: checkoutMethod,
         disableSavedCards: disableSavedCards,
         locale: localeSelect ? localeSelect.value : 'en-GB',
+        checkoutId: (psp.id === 'moneris' && monerisCheckoutIdInput) ? monerisCheckoutIdInput.value.trim() : undefined,
+        checkoutProfileAlias: (psp.id === 'moneris' && monerisProfileAliasSelect) ? monerisProfileAliasSelect.value : undefined,
         dataKey: monerisVaultDataKeyInput ? monerisVaultDataKeyInput.value.trim() : undefined,
         monerisVaultDataKey: monerisVaultDataKeyInput ? monerisVaultDataKeyInput.value.trim() : undefined,
         monerisVaultExpDate: monerisVaultExpDateInput ? monerisVaultExpDateInput.value.trim() : undefined,
         monerisVaultCryptType: monerisVaultCryptTypeSelect ? monerisVaultCryptTypeSelect.value : '7',
         monerisActionType: (checkoutMethod === 'vault' && monerisVaultActionTypeSelect) ? monerisVaultActionTypeSelect.value : 'purchase',
+        localCallback: getLocalCallbackConfigObject(),
         orderPayload: {
             customer_ref: customerRef,
             charge: {
@@ -1850,6 +1869,13 @@ async function createCheckoutSession() {
         if (sessionData.order_no || sessionData.id) {
             updateActiveAttemptStatus('pending', sessionData.order_no || sessionData.id);
         }
+        if (sessionData.ticket) {
+            const cbMonerisTicketInput = document.getElementById('cbMonerisTicket');
+            if (cbMonerisTicketInput) {
+                cbMonerisTicketInput.value = sessionData.ticket;
+            }
+        }
+        updateCallbackStepper(2, 'active');
         
         return sessionData;
 
@@ -1862,6 +1888,7 @@ async function createCheckoutSession() {
 
 /**
  * High-level form submission handler delegating to the selected PSP mount flow
+ */
  */
 async function initializeSdkFlow(e) {
     e.preventDefault();
@@ -2158,6 +2185,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    setupMonerisProfileAndServerControl();
     // URL Query Parameters Support (?tab=callback or ?view=logs)
     const urlParams = new URLSearchParams(window.location.search);
     const requestedTab = urlParams.get('tab');
@@ -2232,3 +2260,197 @@ document.addEventListener('DOMContentLoaded', () => {
         log('[System] Demo playground ready. Configure theme or input a token to start.', 'system');
     }
 });
+
+// =========================================================================
+// Moneris Checkout Profile Manager & Sandbox Server Restart Control
+// =========================================================================
+let cachedMonerisServerConfig = null;
+
+async function fetchServerAndMonerisConfig(silent = false) {
+    try {
+        const res = await fetch('/api/config?t=' + Date.now());
+        if (!res.ok) return null;
+        const data = await res.json();
+        cachedMonerisServerConfig = data;
+
+        const pidBadge = document.getElementById('moneris-server-pid-badge');
+        const statusText = document.getElementById('server-status-text');
+        const checkoutIdInput = document.getElementById('monerisCheckoutIdInput');
+        const aliasSelect = document.getElementById('monerisProfileAliasSelect');
+
+        if (pidBadge && data.server?.pid) {
+            pidBadge.textContent = `PID: ${data.server.pid}`;
+        }
+        if (statusText && data.server?.pid) {
+            statusText.textContent = `Sandbox Online (PID ${data.server.pid})`;
+        }
+
+        if (checkoutIdInput && data.moneris) {
+            const alias = aliasSelect ? aliasSelect.value : 'all';
+            const profiles = data.moneris.checkoutProfiles || {};
+            if (alias !== 'all' && profiles[alias]) {
+                checkoutIdInput.value = profiles[alias];
+            } else if (data.moneris.checkoutId) {
+                checkoutIdInput.value = data.moneris.checkoutId;
+            }
+        }
+
+        if (!silent) {
+            log(`[Server Config] Loaded Moneris profile '${data.moneris?.checkoutId || ''}' (Server PID ${data.server?.pid || '?'}).`, 'system', data);
+        }
+        return data;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function waitForServerRestart(previousPid, maxAttempts = 20) {
+    for (let i = 0; i < maxAttempts; i++) {
+        await new Promise(r => setTimeout(r, 350));
+        try {
+            const res = await fetch('/api/config?t=' + Date.now());
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.server && data.server.pid) {
+                    if (!previousPid || data.server.pid !== previousPid || i >= 2) {
+                        return data;
+                    }
+                }
+            }
+        } catch (e) {
+            // Server is mid-restart, keep polling
+        }
+    }
+    return null;
+}
+
+function setMonerisProfileBanner(message, statusClass = 'status-ok') {
+    const banner = document.getElementById('moneris-profile-status-banner');
+    if (!banner) return;
+    banner.classList.remove('hidden', 'status-ok', 'status-restarting', 'status-error');
+    banner.classList.add(statusClass);
+    banner.innerHTML = message;
+}
+
+async function applyMonerisProfileAndRestart({ restartOnly = false } = {}) {
+    const checkoutIdInput = document.getElementById('monerisCheckoutIdInput');
+    const aliasSelect = document.getElementById('monerisProfileAliasSelect');
+    const syncDbCheckbox = document.getElementById('monerisSyncLocalDbCheckbox');
+    const btnSaveRestart = document.getElementById('btn-save-restart-moneris-profile');
+    const btnRestartOnly = document.getElementById('btn-restart-only-moneris');
+    const btnHeaderRestart = document.getElementById('btn-restart-server-header');
+
+    const checkoutId = checkoutIdInput ? checkoutIdInput.value.trim() : '';
+    const alias = aliasSelect ? aliasSelect.value : 'all';
+    const syncLocalDb = syncDbCheckbox ? Boolean(syncDbCheckbox.checked) : true;
+
+    if (!restartOnly && !checkoutId) {
+        setMonerisProfileBanner('❌ Please enter a valid Moneris <code>checkout_id</code>.', 'status-error');
+        return;
+    }
+
+    const buttons = [btnSaveRestart, btnRestartOnly, btnHeaderRestart].filter(Boolean);
+    buttons.forEach(b => { b.disabled = true; });
+    if (btnHeaderRestart) btnHeaderRestart.innerHTML = '<span>⏳ Restarting...</span>';
+
+    setMonerisProfileBanner(
+        restartOnly
+            ? '⏳ Restarting Sandbox Server & reloading <code>env.local.json</code>...'
+            : `⏳ Saving <code>${checkoutId}</code> (${alias}) to <code>env.local.json</code>${syncLocalDb ? ' + local PostgreSQL' : ''} & restarting server...`,
+        'status-restarting'
+    );
+
+    try {
+        let previousPid = cachedMonerisServerConfig?.server?.pid || null;
+        let dbSyncOk = false;
+
+        if (restartOnly) {
+            const res = await fetch('/api/server/restart', { method: 'POST' });
+            const data = await res.json();
+            previousPid = data.previousPid || previousPid;
+        } else {
+            const res = await fetch('/api/moneris/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    checkoutId,
+                    alias,
+                    syncLocalDb,
+                    restartServer: true
+                })
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) {
+                throw new Error(data.error || 'Failed to update Moneris checkout profile');
+            }
+            previousPid = data.previousPid || previousPid;
+            dbSyncOk = Boolean(data.dbSyncResult && data.dbSyncResult.ok);
+        }
+
+        const newServerData = await waitForServerRestart(previousPid);
+        await fetchServerAndMonerisConfig(true);
+
+        const newPid = newServerData?.server?.pid || cachedMonerisServerConfig?.server?.pid || 'online';
+        const activeChkId = newServerData?.moneris?.checkoutId || checkoutId;
+
+        setMonerisProfileBanner(
+            `✅ Server restarted (PID <code>${previousPid || '?'}</code> → <code>${newPid}</code>) • Active <code>checkout_id</code>: <strong>${activeChkId}</strong>${!restartOnly && syncLocalDb ? (dbSyncOk ? ' • Local DB <code>fare_merchants</code> synced ✅' : '') : ''}`,
+            'status-ok'
+        );
+
+        log(
+            restartOnly
+                ? `[Server Restart] Sandbox server restarted cleanly (PID ${previousPid || '?'} -> ${newPid}).`
+                : `[Moneris Profile] Updated checkout_id='${activeChkId}' (alias=${alias}), synced env.local.json${dbSyncOk ? ' + local DB' : ''}, and restarted server (PID ${previousPid || '?'} -> ${newPid}).`,
+            'success',
+            newServerData
+        );
+    } catch (err) {
+        setMonerisProfileBanner(`❌ Error: ${err.message}`, 'status-error');
+        log(`[Moneris Profile / Server Restart Error] ${err.message}`, 'error');
+    } finally {
+        buttons.forEach(b => { b.disabled = false; });
+        if (btnHeaderRestart) btnHeaderRestart.innerHTML = '<span>⚡ Restart Server</span>';
+    }
+}
+
+function setupMonerisProfileAndServerControl() {
+    const btnSaveRestart = document.getElementById('btn-save-restart-moneris-profile');
+    const btnRestartOnly = document.getElementById('btn-restart-only-moneris');
+    const btnHeaderRestart = document.getElementById('btn-restart-server-header');
+    const aliasSelect = document.getElementById('monerisProfileAliasSelect');
+    const checkoutIdInput = document.getElementById('monerisCheckoutIdInput');
+
+    fetchServerAndMonerisConfig(true);
+
+    if (aliasSelect && checkoutIdInput) {
+        aliasSelect.addEventListener('change', () => {
+            const profiles = cachedMonerisServerConfig?.moneris?.checkoutProfiles || {};
+            const alias = aliasSelect.value;
+            if (alias !== 'all' && profiles[alias]) {
+                checkoutIdInput.value = profiles[alias];
+            } else if (cachedMonerisServerConfig?.moneris?.checkoutId) {
+                checkoutIdInput.value = cachedMonerisServerConfig.moneris.checkoutId;
+            }
+        });
+    }
+
+    document.querySelectorAll('.btn-moneris-preset').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const presetId = btn.getAttribute('data-checkout-id');
+            if (presetId && checkoutIdInput) {
+                checkoutIdInput.value = presetId;
+            }
+        });
+    });
+
+    if (btnSaveRestart) {
+        btnSaveRestart.addEventListener('click', () => applyMonerisProfileAndRestart({ restartOnly: false }));
+    }
+    if (btnRestartOnly) {
+        btnRestartOnly.addEventListener('click', () => applyMonerisProfileAndRestart({ restartOnly: true }));
+    }
+    if (btnHeaderRestart) {
+        btnHeaderRestart.addEventListener('click', () => applyMonerisProfileAndRestart({ restartOnly: true }));
+    }
+}

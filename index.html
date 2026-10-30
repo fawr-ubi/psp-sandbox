@@ -19,9 +19,12 @@
                 <span class="badge" id="psp-badge">Littlepay & Moneris</span>
             </div>
             <nav class="header-nav">
-                <span class="status-indicator">
-                    <span class="status-dot"></span>
-                    <span class="status-text">Sandbox Mode</span>
+                <button type="button" id="btn-restart-server-header" class="header-restart-btn" title="Restart Sandbox Server &amp; Reload env.local.json">
+                    <span>⚡ Restart Server</span>
+                </button>
+                <span class="status-indicator" id="server-status-indicator">
+                    <span class="status-dot" id="server-status-dot"></span>
+                    <span class="status-text" id="server-status-text">Sandbox Mode</span>
                 </span>
             </nav>
         </div>
@@ -202,6 +205,60 @@
                         </div>
                     </details>
                 </div>
+
+                <div id="moneris-profile-settings-container" class="moneris-profile-card" style="display: none;">
+                    <div class="moneris-profile-header">
+                        <div class="moneris-profile-title-wrap">
+                            <span class="moneris-profile-icon">🛡️</span>
+                            <div>
+                                <div class="moneris-profile-title">Moneris Checkout Profile &amp; Server Control</div>
+                                <div class="moneris-profile-subtitle">Switch <code>checkout_id</code> profile, sync <code>env.local.json</code> &amp; local DB, and restart server</div>
+                            </div>
+                        </div>
+                        <span class="moneris-pid-badge" id="moneris-server-pid-badge" title="Active Node.js Sandbox Server PID">PID: —</span>
+                    </div>
+
+                    <div class="form-row" style="margin-bottom: 10px;">
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="monerisProfileAliasSelect">Checkout Profile Alias</label>
+                            <select id="monerisProfileAliasSelect">
+                                <option value="all" selected>All Profiles + Default (Global)</option>
+                                <option value="save_card_light">save_card_light</option>
+                                <option value="save_card_dark">save_card_dark</option>
+                                <option value="payment_with_save_card_light">payment_with_save_card_light</option>
+                                <option value="payment_with_save_card_dark">payment_with_save_card_dark</option>
+                                <option value="payment_without_save_card_light">payment_without_save_card_light</option>
+                                <option value="payment_without_save_card_dark">payment_without_save_card_dark</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="monerisCheckoutIdInput">Active <code>checkout_id</code></label>
+                            <input type="text" id="monerisCheckoutIdInput" class="mono-input" value="chktCFAGT15557" placeholder="e.g. chktCFAGT15557">
+                        </div>
+                    </div>
+
+                    <div class="moneris-profile-presets">
+                        <span class="preset-label">Quick Presets:</span>
+                        <button type="button" class="btn-moneris-preset" data-checkout-id="chktCFAGT15557" title="Default QA Checkout Profile (monca15557)">chktCFAGT15557 (QA Default)</button>
+                    </div>
+
+                    <label class="local-cb-checkbox-row" style="margin-top: 8px; margin-bottom: 10px;">
+                        <input type="checkbox" id="monerisSyncLocalDbCheckbox" checked>
+                        <span>Also sync <code>checkoutProfiles</code> in local PostgreSQL (<code>fare_merchants</code>) so callbacks validate</span>
+                    </label>
+
+                    <div class="moneris-profile-actions">
+                        <button type="button" id="btn-save-restart-moneris-profile" class="btn-moneris-save-restart">
+                            💾 Apply Profile &amp; 🔄 Restart Server
+                        </button>
+                        <button type="button" id="btn-restart-only-moneris" class="btn-moneris-restart-only" title="Restart Sandbox Server without changing profile">
+                            🔄 Restart Only
+                        </button>
+                    </div>
+
+                    <div id="moneris-profile-status-banner" class="moneris-profile-status hidden"></div>
+                </div>
+
 
                 <div id="moneris-vault-settings-container" style="display: none;">
                     <div class="form-group">
