@@ -5,6 +5,7 @@
 
 :root,
 [data-ui-theme="nordic"] {
+    color-scheme: dark;
     --bg-app: #191d24;
     --bg-panel: #222731;
     --bg-elevated: #2b313d;
@@ -51,6 +52,102 @@
     --radius-md: 4px;
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ==========================================================================
+   Light Mode — Crisp Developer Paper / Nord Snow Storm
+   ========================================================================== */
+[data-ui-theme="light"] {
+    color-scheme: light;
+    --bg-app: #f1f5f9;
+    --bg-panel: #ffffff;
+    --bg-elevated: #e8eef5;
+    --bg-input: #f8fafc;
+    --bg-hover: #dde5f0;
+    --bg-log: #f8fafc;
+    --bg-log-header: #edf2f7;
+    --bg-code: #f1f5f9;
+
+    --border-color: #cbd5e1;
+    --border-subtle: #e2e8f0;
+    --border-strong: #94a3b8;
+    --border-focus: #0284c7;
+
+    --text-main: #0f172a;
+    --text-secondary: #334155;
+    --text-muted: #64748b;
+
+    --accent-bg: #0f172a;
+    --accent-bg-hover: #1e293b;
+    --accent-border: #0f172a;
+    --accent-text: #ffffff;
+    --accent-indicator: #0284c7;
+
+    --status-ok-bg: #ecfdf5;
+    --status-ok-border: #6ee7b7;
+    --status-ok-text: #047857;
+
+    --status-warn-bg: #fffbeb;
+    --status-warn-border: #fcd34d;
+    --status-warn-text: #b45309;
+
+    --status-err-bg: #fef2f2;
+    --status-err-border: #fca5a5;
+    --status-err-text: #b91c1c;
+
+    --syn-key: #0369a1;
+    --syn-string: #15803d;
+    --syn-number: #7e22ce;
+    --syn-bool: #c2410c;
+    --syn-null: #64748b;
+}
+
+/* ==========================================================================
+   Color Mode — Vibrant Cosmic Indigo & Electric Cyan (Tokyo Synth)
+   ========================================================================== */
+[data-ui-theme="color"] {
+    color-scheme: dark;
+    --bg-app: #0f1021;
+    --bg-panel: #171932;
+    --bg-elevated: #212447;
+    --bg-input: #0b0c19;
+    --bg-hover: #2b2f5c;
+    --bg-log: #0a0b16;
+    --bg-log-header: #14162d;
+    --bg-code: #080912;
+
+    --border-color: #31366b;
+    --border-subtle: #232752;
+    --border-strong: #4b529e;
+    --border-focus: #00e5ff;
+
+    --text-main: #eef0ff;
+    --text-secondary: #a5acff;
+    --text-muted: #6c73b8;
+
+    --accent-bg: #4f46e5;
+    --accent-bg-hover: #6366f1;
+    --accent-border: #818cf8;
+    --accent-text: #ffffff;
+    --accent-indicator: #00e5ff;
+
+    --status-ok-bg: #062e26;
+    --status-ok-border: #10b981;
+    --status-ok-text: #34d399;
+
+    --status-warn-bg: #332108;
+    --status-warn-border: #f59e0b;
+    --status-warn-text: #fbbf24;
+
+    --status-err-bg: #380d20;
+    --status-err-border: #f43f5e;
+    --status-err-text: #fb7185;
+
+    --syn-key: #38bdf8;
+    --syn-string: #4ade80;
+    --syn-number: #f472b6;
+    --syn-bool: #fb923c;
+    --syn-null: #818cf8;
 }
 
 /* ==========================================================================
@@ -1035,7 +1132,7 @@ input[type="color"]::-webkit-color-swatch {
     font-weight: 600;
     letter-spacing: 0.05em;
     margin-bottom: 0.75rem;
-    color: var(--accent-text);
+    color: var(--text-main);
     word-break: break-all;
 }
 

@@ -5,7 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PSP Sandbox — Developer Console</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
-    <link rel="stylesheet" href="style.css?v=23">
+    <script>
+        (function() {
+            try {
+                var savedTheme = localStorage.getItem('psp_sandbox_ui_theme_v1');
+                if (savedTheme === 'nordic' || savedTheme === 'light' || savedTheme === 'color') {
+                    document.documentElement.setAttribute('data-ui-theme', savedTheme);
+                }
+            } catch (e) {}
+        })();
+    </script>
+    <link rel="stylesheet" href="style.css?v=24">
 </head>
 <body>
     <header class="app-header">
@@ -16,6 +26,12 @@
                 <span class="badge" id="psp-badge">Littlepay SDK</span>
             </div>
             <nav class="header-nav">
+                <div class="ui-theme-switcher" id="ui-theme-switcher" role="group" aria-label="UI Theme Mode">
+                    <span class="ui-theme-label">Theme</span>
+                    <button type="button" class="ui-theme-btn active" data-theme="nordic" title="Dark Mode (Nordic Slate)">Dark</button>
+                    <button type="button" class="ui-theme-btn" data-theme="light" title="Light Mode (Crisp Paper)">Light</button>
+                    <button type="button" class="ui-theme-btn" data-theme="color" title="Color Mode (Cosmic Indigo &amp; Cyan)">Color</button>
+                </div>
                 <button type="button" id="btn-restart-server-header" class="header-restart-btn" title="Restart Sandbox Server &amp; Reload env.local.json">
                     <span>Restart Server</span>
                 </button>
@@ -687,6 +703,6 @@
     <script src="https://static.checkout.sandbox.littlepay.com/littlepay-checkout-v2.min.js"></script>
     <!-- Moneris Checkout JS SDK Sandbox -->
     <script src="https://gatewayt.moneris.com/chktv2/js/chkt_v2.00.js"></script>
-    <script src="app.js?v=18"></script>
+    <script src="app.js?v=19"></script>
 </body>
 </html>

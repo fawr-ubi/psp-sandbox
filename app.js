@@ -2148,13 +2148,49 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
-    // Lock in Nordic Theme + Mono Logs Toggle
+    // Persistent UI Theme Switcher (Dark Nordic / Light / Color) + Mono Logs Toggle
+    const UI_THEME_STORAGE_KEY = 'psp_sandbox_ui_theme_v1';
+    const VALID_UI_THEMES = ['nordic', 'light', 'color'];
+    const themeBtns = document.querySelectorAll('#ui-theme-switcher .ui-theme-btn');
+
+    const applyUiTheme = (themeName, persist = true) => {
+        const resolved = VALID_UI_THEMES.includes(themeName) ? themeName : 'nordic';
+        document.documentElement.setAttribute('data-ui-theme', resolved);
+        if (document.body) {
+            document.body.setAttribute('data-ui-theme', resolved);
+        }
+        themeBtns.forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.theme === resolved);
+        });
+        if (persist) {
+            try {
+                localStorage.setItem(UI_THEME_STORAGE_KEY, resolved);
+            } catch (e) {}
+        }
+    };
+
+    try {
+        const savedUiTheme = localStorage.getItem(UI_THEME_STORAGE_KEY);
+        applyUiTheme(savedUiTheme || 'nordic', false);
+    } catch (e) {
+        applyUiTheme('nordic', false);
+    }
+
+    themeBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const targetTheme = btn.dataset.theme;
+            applyUiTheme(targetTheme, true);
+        });
+    });
+
+    window.addEventListener('storage', (e) => {
+        if (e.key === UI_THEME_STORAGE_KEY && e.newValue) {
+            applyUiTheme(e.newValue, false);
+        }
+    });
+
     const MONO_LOGS_STORAGE_KEY = 'psp_sandbox_mono_logs_v1';
     const monoLogsBtn = document.getElementById('btn-mono-logs');
-    document.documentElement.setAttribute('data-ui-theme', 'nordic');
-    if (document.body) {
-        document.body.setAttribute('data-ui-theme', 'nordic');
-    }
 
     if (monoLogsBtn && logsContainer) {
         const applyMonoLogs = (isMono) => {
