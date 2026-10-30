@@ -994,6 +994,28 @@ async function fetchAndRenderLittlepayReceipt(sessionData, paymentIntentIdOverri
             detailsHtml += `<br><strong>Error Detail:</strong> <span style="color: var(--error);">${escapeHtml(JSON.stringify(pi.error || sdkError))}</span>`;
         }
 
+        // Populate Local Callback LittlePay fields with the latest checkout values
+        populateLittlepayCallbackFieldsFromReceipt({
+            orderId: receiptData.order_id || sessionData.id || '',
+            transactionId: receiptData.payment_intent_id || paymentIntentId || '',
+            fundingSourceId: fundingSourceId !== 'N/A' ? fundingSourceId : '',
+            cardMask: formattedMaskedPan !== 'SAVED_CARD' ? formattedMaskedPan : (cardMask16 !== 'N/A' ? cardMask16 : '************4242'),
+            cardExpiry: cardExpiry !== 'N/A' ? cardExpiry : '12/28',
+            cardType: cardType !== 'N/A' ? cardType : 'VISA',
+            amount: amount,
+            currency: currency,
+            customerRef: receiptData.customer_ref || customerRef || ''
+        });
+
+        detailsHtml += `
+            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(47, 133, 90, 0.25);">
+                <button type="button" class="btn-use-saved-token btn-forward-callback-inline btn-trigger-local-cb" data-psp="littlepay" data-order-id="${receiptData.order_id || sessionData.id || ''}" style="width: 100%; padding: 8px 12px; font-size: 0.78rem; font-weight: 700; color: #ffffff; background: linear-gradient(135deg, #276749 0%, #2f855a 100%); border: none; border-radius: 6px; cursor: pointer;">
+                    🔄 Forward Callback to Local Server (wfwp-platform)
+                </button>
+            </div>
+        `;
+        detailsHtml += `<div id="inline-cb-forward-status" style="margin-top: 10px;"></div>`;
+
         if (sdkContainer) {
             sdkContainer.classList.remove('hidden');
             sdkContainer.innerHTML = `
@@ -1010,6 +1032,15 @@ async function fetchAndRenderLittlepayReceipt(sessionData, paymentIntentIdOverri
                     </div>
                 </div>
             `;
+        }
+
+        if (isApproved) {
+            updateCallbackStepper(2, 'done');
+            if (isLocalCallbackEnabled()) {
+                await forwardLocalCallbackToBackend({ psp: 'littlepay', autoTriggered: true });
+            }
+        } else {
+            updateCallbackStepper(2, 'error');
         }
     } catch (err) {
         log(`[Proxy Littlepay Error] Failed to inspect Littlepay receipt: ${err.message}`, 'error');
@@ -1592,6 +1623,19 @@ const SUPPORTED_PSPS = {
                         detailsHtml += `<button type="button" class="btn-use-saved-token" data-token="${tokenize.datakey}">💳 Pay Next Order with This Saved Token</button>`;
                     }
 
+                    const cbMonerisTicketInput = document.getElementById('cbMonerisTicket');
+                    if (cbMonerisTicketInput && sessionData.ticket) {
+                        cbMonerisTicketInput.value = sessionData.ticket;
+                    }
+
+                    detailsHtml += `
+                        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(43, 108, 176, 0.25);">
+                            <button type="button" class="btn-forward-callback-inline" data-psp="moneris" data-ticket="${sessionData.ticket || ''}" style="width: 100%; padding: 8px 12px; font-size: 0.78rem; font-weight: 700; color: #ffffff; background: linear-gradient(135deg, #2b6cb0 0%, #3182ce 100%); border: none; border-radius: 6px; cursor: pointer;">
+                                🔄 Forward Callback to Local Server (wfwp-platform)
+                            </button>
+                        </div>
+                    `;
+
                     cleanupExistingSession();
                     if (sdkContainer) {
                         sdkContainer.classList.remove('hidden');
@@ -1605,6 +1649,14 @@ const SUPPORTED_PSPS = {
                                 </div>
                             </div>
                         `;
+                    }
+
+                    updateCallbackStepper(2, 'done');
+                    if (isLocalCallbackEnabled() && isApproved) {
+                        log('[Local Callback] Auto-forwarding enabled: forwarding Moneris callback to local server...', 'system');
+                        setTimeout(() => {
+                            forwardLocalCallbackToBackend({ psp: 'moneris', autoTriggered: true });
+                        }, 300);
                     }
                 } catch (rErr) {
                     log(`[Proxy Moneris Error] Receipt verification error: ${rErr.message}`, 'error');
@@ -1888,7 +1940,6 @@ async function createCheckoutSession() {
 
 /**
  * High-level form submission handler delegating to the selected PSP mount flow
- */
  */
 async function initializeSdkFlow(e) {
     e.preventDefault();
@@ -2185,7 +2236,18 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    setupMonerisProfileAndServerControl();
+    setupLocalCallbackPanel();
+
+    // Top-level Navigation Tabs (Checkout & SDK vs Local Backend Callback)
+    const tabBtnCheckout = document.getElementById('tab-btn-checkout');
+    const tabBtnCallback = document.getElementById('tab-btn-callback');
+    if (tabBtnCheckout) {
+        tabBtnCheckout.addEventListener('click', () => switchSandboxTab('checkout'));
+    }
+    if (tabBtnCallback) {
+        tabBtnCallback.addEventListener('click', () => switchSandboxTab('callback'));
+    }
+
     // URL Query Parameters Support (?tab=callback or ?view=logs)
     const urlParams = new URLSearchParams(window.location.search);
     const requestedTab = urlParams.get('tab');
@@ -2260,6 +2322,871 @@ document.addEventListener('DOMContentLoaded', () => {
         log('[System] Demo playground ready. Configure theme or input a token to start.', 'system');
     }
 });
+
+// =========================================================================
+// Local Backend Callback Forwarding (wfwp-platform)
+// =========================================================================
+const STORAGE_KEY_LOCAL_CALLBACK = 'psp_sandbox_local_callback_state_v2';
+let localDiscoveredDbEntities = { merchants: [], carts: [], passengers: [] };
+
+function isLocalCallbackEnabled() {
+    const toggle = document.getElementById('localCallbackEnabled');
+    return Boolean(toggle && toggle.checked);
+}
+
+function getLocalCallbackConfigObject() {
+    const psp = getSelectedPsp();
+    const getVal = (id, fallback = '') => {
+        const el = document.getElementById(id);
+        return el ? el.value.trim() : fallback;
+    };
+    const getChecked = (id, fallback = true) => {
+        const el = document.getElementById(id);
+        return el ? Boolean(el.checked) : fallback;
+    };
+
+    const merchantId = getVal('cbMerchantUuid', '');
+    const reference = getVal('cbReferenceUuid', '');
+    const customerRef = getVal('cbCustomerUuid', '');
+    const paymentContext = getVal('cbPaymentContext', 'save_card');
+    const shouldSaveCard = getVal('cbMonerisShouldSaveCard', 'true') !== 'false';
+    const darkMode = getVal('cbMonerisDarkMode', 'false') === 'true';
+
+    return {
+        enabled: isLocalCallbackEnabled(),
+        psp: psp.id,
+        customerShortname: getVal('cbCustomerShortname', 'DEV-LOCAL'),
+        paymentContext: paymentContext,
+        targetServer: getVal('cbTargetServer', 'auto'),
+        merchantId: merchantId,
+        merchantUuid: merchantId,
+        reference: reference,
+        referenceUuid: reference,
+        customerRef: customerRef,
+        customerUuid: customerRef,
+        shouldSaveCard: shouldSaveCard,
+        darkMode: darkMode,
+        autoConsumeQueue: getChecked('cbAutoConsumeQueue', true),
+        webhookSecret: getVal('cbLpWebhookSecret', 'test_secret_12345'),
+        paymentProviderId: getVal('cbLpProviderId', 'matawan-testportal'),
+        fundingSourceId: getVal('cbLpFundingSourceId', ''),
+        transactionId: getVal('cbLpTransactionId', ''),
+        cardMask: getVal('cbLpCardMask', '************4242'),
+        cardExpiry: getVal('cbLpCardExpiry', '12/28'),
+        cardType: getVal('cbLpCardType', 'VISA'),
+        amount: parseInt(orderAmountInput ? orderAmountInput.value.trim() : '811', 10) || 0,
+        currency: (orderCurrencyInput ? orderCurrencyInput.value.trim() : 'EUR') || 'EUR',
+        ticket: getVal('cbMonerisTicket', '')
+    };
+}
+
+function saveLocalCallbackStateToStorage() {
+    try {
+        const cfg = getLocalCallbackConfigObject();
+        localStorage.setItem(STORAGE_KEY_LOCAL_CALLBACK, JSON.stringify(cfg));
+    } catch (e) {
+        // Ignore storage errors
+    }
+}
+
+function loadLocalCallbackStateFromStorage() {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY_LOCAL_CALLBACK);
+        if (!raw) return null;
+        return JSON.parse(raw);
+    } catch (e) {
+        return null;
+    }
+}
+
+function updateCallbackStepper(stepNum, state = 'active') {
+    for (let i = 1; i <= 4; i++) {
+        const el = document.getElementById(`cb-step-${i}`);
+        if (!el) continue;
+        if (i < stepNum) {
+            el.classList.remove('active');
+            el.classList.add('done');
+        } else if (i === stepNum) {
+            if (state === 'done') {
+                el.classList.remove('active');
+                el.classList.add('done');
+            } else {
+                el.classList.add('active');
+                el.classList.remove('done');
+            }
+        } else {
+            el.classList.remove('active', 'done');
+        }
+    }
+}
+
+function populateLittlepayCallbackFieldsFromReceipt(orderIdOrObj, receipt) {
+    const fsInput = document.getElementById('cbLpFundingSourceId');
+    const txInput = document.getElementById('cbLpTransactionId');
+    const panInput = document.getElementById('cbLpCardMask');
+    const expInput = document.getElementById('cbLpCardExpiry');
+    const schemeInput = document.getElementById('cbLpCardType');
+
+    if (orderIdOrObj && typeof orderIdOrObj === 'object' && !receipt) {
+        const obj = orderIdOrObj;
+        if (fsInput && obj.fundingSourceId) fsInput.value = obj.fundingSourceId;
+        if (txInput && (obj.transactionId || obj.orderId)) txInput.value = obj.transactionId || obj.orderId;
+        if (panInput && obj.cardMask && obj.cardMask !== 'SAVED_CARD') panInput.value = obj.cardMask;
+        if (expInput && obj.cardExpiry) expInput.value = obj.cardExpiry;
+        if (schemeInput && obj.cardType) schemeInput.value = String(obj.cardType).toUpperCase();
+        saveLocalCallbackStateToStorage();
+        return;
+    }
+
+    const orderId = orderIdOrObj;
+    const latestSpm = receipt?.latestStoredPaymentMethod || {};
+    const latestDetail = receipt?.latestStoredPaymentMethodDetail || {};
+    const pi = receipt?.paymentIntent || {};
+
+    const fundingSourceId = latestSpm.funding_source_id || latestSpm.id || latestDetail.funding_source_id || latestDetail.id || '';
+    const txId = receipt?.payment_intent_id || pi.id || orderId || '';
+    const maskedPan = receipt?.formattedMaskedPan || latestSpm.card_mask || latestDetail.card_mask || '';
+    const expiry = latestSpm.card_expiry || latestDetail.card_expiry || '';
+    const cardType = latestSpm.card_type || latestDetail.card_type || latestSpm.scheme || '';
+
+    if (fsInput && fundingSourceId) fsInput.value = fundingSourceId;
+    if (txInput && txId) txInput.value = txId;
+    if (panInput && maskedPan && maskedPan !== 'SAVED_CARD') panInput.value = maskedPan;
+    if (expInput && expiry) expInput.value = expiry;
+    if (schemeInput && cardType) schemeInput.value = String(cardType).toUpperCase();
+
+    saveLocalCallbackStateToStorage();
+}
+
+function syncLocalCallbackToMainForm() {
+    const cfg = getLocalCallbackConfigObject();
+    if (!cfg.enabled) return;
+
+    // 1. Sync Customer Reference (Passenger Custom UUID)
+    if (cfg.customerRef && customerRefInput) {
+        customerRefInput.value = cfg.customerRef;
+    }
+
+    // 2. Sync Metadata rows for LittlePay & general alignment
+    const metadataContainer = document.getElementById('metadata-rows-container');
+    if (!metadataContainer) return;
+
+    const setOrCreateMetadataRow = (key, value) => {
+        if (!value) return;
+        const rows = metadataContainer.querySelectorAll('.metadata-row');
+        for (const row of rows) {
+            const kIn = row.querySelector('.metadata-key');
+            const vIn = row.querySelector('.metadata-value');
+            if (kIn && kIn.value.trim() === key && vIn) {
+                vIn.value = value;
+                return;
+            }
+        }
+        const row = document.createElement('div');
+        row.className = 'metadata-row';
+        row.style.display = 'flex';
+        row.style.gap = '8px';
+        row.style.alignItems = 'center';
+        row.innerHTML = `
+            <input type="text" class="metadata-key" value="${key}" placeholder="Key" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
+            <input type="text" class="metadata-value" value="${value}" placeholder="Value" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
+            <button type="button" class="btn-remove-row" style="background: none; border: none; color: var(--error); font-size: 1.25rem; cursor: pointer; padding: 0 4px; line-height: 1;">×</button>
+        `;
+        const removeBtn = row.querySelector('.btn-remove-row');
+        if (removeBtn) {
+            removeBtn.addEventListener('click', () => row.remove());
+        }
+        metadataContainer.appendChild(row);
+    };
+
+    if (cfg.merchantId) setOrCreateMetadataRow('merchant_id', cfg.merchantId);
+    if (cfg.paymentContext) setOrCreateMetadataRow('payment_context', cfg.paymentContext);
+    if (cfg.reference) setOrCreateMetadataRow('reference', cfg.reference);
+}
+
+function syncLocalCallbackMerchantForPsp(pspId) {
+    if (!localDiscoveredDbEntities.merchants || localDiscoveredDbEntities.merchants.length === 0) return;
+    const providerUpper = pspId === 'moneris' ? 'MONERIS' : 'LITTLEPAY';
+    const matchingMerchant = localDiscoveredDbEntities.merchants.find(
+        m => String(m.psp).toUpperCase() === providerUpper && (pspId === 'moneris' ? m.decryptedApiToken : m.decryptedWebhookSecret)
+    ) || localDiscoveredDbEntities.merchants.find(
+        m => String(m.psp).toUpperCase() === providerUpper
+    );
+    if (matchingMerchant) {
+        const cbMerchantSelect = document.getElementById('cbMerchantSelect');
+        const cbMerchantUuid = document.getElementById('cbMerchantUuid');
+        const cbLpWebhookSecret = document.getElementById('cbLpWebhookSecret');
+        const cbLpProviderId = document.getElementById('cbLpProviderId');
+        if (cbMerchantSelect) cbMerchantSelect.value = matchingMerchant.customUuid;
+        if (cbMerchantUuid) cbMerchantUuid.value = matchingMerchant.customUuid;
+        if (pspId === 'littlepay') {
+            if (matchingMerchant.decryptedWebhookSecret && cbLpWebhookSecret) {
+                cbLpWebhookSecret.value = matchingMerchant.decryptedWebhookSecret;
+            }
+            if (matchingMerchant.paymentProviderId && cbLpProviderId) {
+                cbLpProviderId.value = matchingMerchant.paymentProviderId;
+            }
+        }
+        syncLocalCallbackToMainForm();
+        saveLocalCallbackStateToStorage();
+    }
+}
+
+async function discoverAndAutoFillFromLocalDb(runCheckAfter = true) {
+    const btnAutofill = document.getElementById('btn-cb-autofill');
+    const cfg = getLocalCallbackConfigObject();
+    if (btnAutofill) {
+        btnAutofill.disabled = true;
+        btnAutofill.textContent = '⏳ Discovering local DB...';
+    }
+
+    try {
+        const res = await fetch('/api/local-callback/preflight', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'discover',
+                psp: cfg.psp,
+                customerShortname: cfg.customerShortname,
+                targetServer: cfg.targetServer
+            })
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) {
+            throw new Error(data.error || 'Discovery failed');
+        }
+
+        localDiscoveredDbEntities = {
+            merchants: data.merchants || [],
+            carts: data.shoppingCarts || [],
+            passengers: data.samplePassengers || []
+        };
+
+        // Populate Merchant dropdown
+        const cbMerchantSelect = document.getElementById('cbMerchantSelect');
+        if (cbMerchantSelect) {
+            cbMerchantSelect.innerHTML = '<option value="">-- Select Merchant from DB --</option>';
+            localDiscoveredDbEntities.merchants.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.customUuid;
+                opt.dataset.psp = m.psp;
+                opt.dataset.secret = m.decryptedWebhookSecret || '';
+                opt.dataset.providerId = m.paymentProviderId || '';
+                opt.textContent = `#${m.id} [${m.psp}] ${m.name} (${m.paymentProviderId}) → ${m.customUuid.slice(0, 8)}…`;
+                cbMerchantSelect.appendChild(opt);
+            });
+        }
+
+        // Populate Entity / Cart / Passenger dropdown
+        const cbEntitySelect = document.getElementById('cbEntitySelect');
+        if (cbEntitySelect) {
+            cbEntitySelect.innerHTML = '<option value="">-- Select Passenger / ShoppingCart from DB --</option>';
+            localDiscoveredDbEntities.passengers.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.customUuid;
+                opt.dataset.type = 'passenger';
+                opt.dataset.passengerUuid = p.customUuid;
+                opt.textContent = `👤 ${p.label} → ${p.customUuid.slice(0, 8)}…`;
+                cbEntitySelect.appendChild(opt);
+            });
+            localDiscoveredDbEntities.carts.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.customUuid;
+                opt.dataset.type = 'cart';
+                opt.dataset.passengerUuid = c.passengerCustomUuid || '';
+                opt.textContent = `🛒 Cart #${c.id} (${c.status}, Passenger #${c.passengerAccountId}) → ${c.customUuid.slice(0, 8)}…`;
+                cbEntitySelect.appendChild(opt);
+            });
+        }
+
+        // Auto-select matching merchant for active PSP
+        const psp = getSelectedPsp();
+        syncLocalCallbackMerchantForPsp(psp.id);
+
+        // Auto-select entity based on paymentContext
+        const firstCart = localDiscoveredDbEntities.carts[0];
+        const firstPassenger = localDiscoveredDbEntities.passengers[0];
+        const cbReferenceUuid = document.getElementById('cbReferenceUuid');
+        const cbCustomerUuid = document.getElementById('cbCustomerUuid');
+
+        if (cfg.paymentContext === 'cart' && firstCart) {
+            if (cbEntitySelect) cbEntitySelect.value = firstCart.customUuid;
+            if (cbReferenceUuid) cbReferenceUuid.value = firstCart.customUuid;
+            if (cbCustomerUuid && firstCart.passengerCustomUuid) {
+                cbCustomerUuid.value = firstCart.passengerCustomUuid;
+            }
+        } else if (firstPassenger) {
+            if (cbEntitySelect) cbEntitySelect.value = firstPassenger.customUuid;
+            if (cbCustomerUuid) cbCustomerUuid.value = firstPassenger.customUuid;
+            if (cbReferenceUuid) cbReferenceUuid.value = firstPassenger.customUuid;
+        }
+
+        syncLocalCallbackToMainForm();
+        saveLocalCallbackStateToStorage();
+        log(`[Local Callback] Discovered ${localDiscoveredDbEntities.merchants.length} merchants, ${localDiscoveredDbEntities.carts.length} carts, ${localDiscoveredDbEntities.passengers.length} passengers from local PostgreSQL.`, 'success', data);
+
+        if (runCheckAfter) {
+            await runLocalCallbackPreflightChecks();
+        }
+    } catch (err) {
+        log(`[Local Callback Error] Auto-discovery failed: ${err.message}`, 'error');
+    } finally {
+        if (btnAutofill) {
+            btnAutofill.disabled = false;
+            btnAutofill.textContent = '⚡ Auto-Fill from Local DB';
+        }
+    }
+}
+
+async function runLocalCallbackPreflightChecks() {
+    const btnPreflight = document.getElementById('btn-cb-preflight');
+    const resultsContainer = document.getElementById('local-cb-preflight-results');
+    const badgeEl = document.getElementById('localCallbackStatusBadge');
+    const cfg = getLocalCallbackConfigObject();
+
+    if (btnPreflight) {
+        btnPreflight.disabled = true;
+        btnPreflight.textContent = '⏳ Running Checks...';
+    }
+    if (resultsContainer) {
+        resultsContainer.classList.remove('hidden');
+        resultsContainer.innerHTML = '<div style="font-size: 0.72rem; color: var(--text-muted); padding: 4px;">Running 6 pre-flight diagnostic checks against local Docker & PostgreSQL...</div>';
+    }
+
+    try {
+        const res = await fetch('/api/local-callback/preflight', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'check',
+                psp: cfg.psp,
+                customerShortname: cfg.customerShortname,
+                paymentContext: cfg.paymentContext,
+                targetServer: cfg.targetServer,
+                merchantId: cfg.merchantId,
+                reference: cfg.reference,
+                customerRef: cfg.customerRef,
+                webhookSecret: cfg.webhookSecret
+            })
+        });
+
+        const data = await res.json();
+        if (!res.ok || data.error) {
+            throw new Error(data.error || 'Pre-flight check failed');
+        }
+
+        if (resultsContainer && Array.isArray(data.checks)) {
+            resultsContainer.innerHTML = data.checks.map(chk => {
+                const icon = chk.status === 'ok' ? '✅' : (chk.status === 'warn' ? '⚠️' : '❌');
+                let fixBtnHtml = '';
+                if (chk.fixAction) {
+                    fixBtnHtml = `<button type="button" class="btn-preflight-fix" data-fix='${JSON.stringify(chk.fixAction).replace(/'/g, "&#39;")}'>${chk.fixAction.label}</button>`;
+                }
+                return `
+                    <div class="preflight-check-item status-${chk.status}">
+                        <span class="preflight-check-icon">${icon}</span>
+                        <div class="preflight-check-body">
+                            <div class="preflight-check-label">${chk.title || chk.label}</div>
+                            <div class="preflight-check-detail">${chk.summary || ''}${chk.details ? ` — <span style="opacity:0.85;">${chk.details}</span>` : ''}</div>
+                        </div>
+                        ${fixBtnHtml}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        if (badgeEl && isLocalCallbackEnabled()) {
+            badgeEl.textContent = data.allPassed ? 'AUTO-ON (OK)' : 'AUTO-ON (WARN)';
+            badgeEl.classList.add('active');
+        }
+        updateCompactCallbackSummaryPills(data);
+
+        updateCallbackStepper(1, data.allPassed ? 'done' : 'active');
+        log(`[Local Callback Pre-Flight] Completed (${data.allPassed ? 'ALL PASSED' : 'Action Recommended'})`, data.allPassed ? 'success' : 'system', data);
+        return data;
+    } catch (err) {
+        if (resultsContainer) {
+            resultsContainer.innerHTML = `<div class="preflight-check-item status-error"><span class="preflight-check-icon">❌</span><div class="preflight-check-body"><div class="preflight-check-label">Pre-Flight Error</div><div class="preflight-check-detail">${err.message}</div></div></div>`;
+        }
+        log(`[Local Callback Pre-Flight Error] ${err.message}`, 'error');
+        return null;
+    } finally {
+        if (btnPreflight) {
+            btnPreflight.disabled = false;
+            btnPreflight.textContent = '🩺 Run Pre-Flight Checks';
+        }
+    }
+}
+
+async function forwardLocalCallbackToBackend(options = {}) {
+    const cfg = getLocalCallbackConfigObject();
+    const pspId = options.psp || cfg.psp;
+    const btnForward = document.getElementById('btn-cb-forward-now');
+    const resultCard = document.getElementById('local-cb-persistence-result');
+
+    if (options.orderId) {
+        cfg.orderId = options.orderId;
+    }
+    if (options.ticket) {
+        cfg.ticket = options.ticket;
+        const ticketInput = document.getElementById('cbMonerisTicket');
+        if (ticketInput) ticketInput.value = options.ticket;
+    }
+
+    if (btnForward) {
+        btnForward.disabled = true;
+        btnForward.textContent = `⏳ Forwarding ${pspId.toUpperCase()} Callback to Local Backend...`;
+    }
+    updateCallbackStepper(3, 'active');
+
+    log(`[Local Callback] Forwarding ${pspId.toUpperCase()} callback (${options.autoTriggered ? 'AUTO' : 'MANUAL'}) to /billing/payment/callback/${cfg.customerShortname}...`, 'system', cfg);
+
+    try {
+        const res = await fetch('/api/local-callback/forward', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ...cfg,
+                psp: pspId
+            })
+        });
+
+        const data = await res.json();
+        if (!res.ok || data.error) {
+            throw new Error(data.error || `HTTP ${res.status}`);
+        }
+
+        const statusCode = data.callbackResponse?.statusCode || 500;
+        const isSuccess = Boolean(data.ok && statusCode >= 200 && statusCode < 300);
+        updateCallbackStepper(3, isSuccess ? 'done' : 'active');
+        updateCallbackStepper(4, isSuccess ? 'done' : 'active');
+
+        if (resultCard) {
+            resultCard.classList.remove('hidden');
+            const newTokens = data.persistence?.newTokens || [];
+            const customerTokens = data.persistence?.customerTokens || [];
+            const latestToken = newTokens[0] || customerTokens[0];
+            const newSales = data.persistence?.newSales || [];
+            const recentSales = data.persistence?.recentSales || [];
+            const latestSale = newSales[0] || recentSales[0];
+            const cartRow = data.persistence?.updatedCart;
+            const sigHeader = data.callbackRequest?.headers?.['Event-Signature'] || '';
+
+            resultCard.innerHTML = `
+                <div class="persistence-title">
+                    <span>${isSuccess ? '✅ Local Callback Forwarded & Persisted in DB' : `⚠️ Callback Returned HTTP ${statusCode}`}</span>
+                    <span style="font-family: var(--font-mono); font-size: 0.68rem;">HTTP ${statusCode} (${data.targetContainer})</span>
+                </div>
+                <div class="persistence-row"><strong>Endpoint:</strong> <code>POST ${data.callbackRequest?.url}</code></div>
+                <div class="persistence-row"><strong>Auth Header:</strong> <code>${pspId === 'moneris' ? 'X-Payment-Provider: moneris + Bearer JWT' : `Event-Signature: ${sigHeader.slice(0, 24)}…`}</code></div>
+                ${data.consumerResult ? `<div class="persistence-row"><strong>Messenger Queue:</strong> Consumed <code>billing_sale_transport</code> (${data.consumerResult.ok ? 'OK' : 'Warning'})</div>` : ''}
+                ${latestToken ? `<div class="persistence-row"><strong>Card Token in DB (<code>fare_payment_tokens</code>):</strong> <code>#${latestToken.id}</code> | token=<code>${latestToken.token}</code> | label=<code>${latestToken.label}</code> | provider=<code>${latestToken.paymentProviderName}</code> | passenger=<code>#${latestToken.passengerAccountId}</code> ${newTokens.length > 0 ? '<span style="color:#276749;font-weight:700;">(NEW!)</span>' : ''}</div>` : ''}
+                ${latestSale ? `<div class="persistence-row"><strong>Sale in DB (<code>fare_sales</code>):</strong> <code>#${latestSale.id}</code> | status=<code>${latestSale.status}</code> | ref=<code>${latestSale.reference || latestSale.transactionId}</code> ${newSales.length > 0 ? '<span style="color:#276749;font-weight:700;">(NEW!)</span>' : ''}</div>` : ''}
+                ${cartRow ? `<div class="persistence-row"><strong>ShoppingCart (<code>#${cartRow.id}</code>):</strong> status=<code>${cartRow.status}</code> | updated=<code>${cartRow.updatedAt}</code></div>` : ''}
+            `;
+        }
+
+        log(`[Local Callback] ${pspId.toUpperCase()} callback response HTTP ${statusCode} & DB verification complete.`, isSuccess ? 'success' : 'error', data);
+        return data;
+    } catch (err) {
+        if (resultCard) {
+            resultCard.classList.remove('hidden');
+            resultCard.innerHTML = `<div class="persistence-title" style="color: var(--error);">❌ Callback Forwarding Failed: ${err.message}</div>`;
+        }
+        log(`[Local Callback Error] ${err.message}`, 'error');
+        return null;
+    } finally {
+        if (btnForward) {
+            btnForward.disabled = false;
+            btnForward.textContent = '🚀 Forward / Replay Callback to Local Server Now';
+        }
+    }
+}
+
+function switchSandboxTab(tabName = 'checkout') {
+    const viewCheckout = document.getElementById('tab-view-checkout');
+    const viewCallback = document.getElementById('tab-view-callback');
+    const btnCheckout = document.getElementById('tab-btn-checkout');
+    const btnCallback = document.getElementById('tab-btn-callback');
+
+    const isCallback = tabName === 'callback';
+    if (viewCheckout) viewCheckout.classList.toggle('hidden', isCallback);
+    if (viewCallback) viewCallback.classList.toggle('hidden', !isCallback);
+    if (btnCheckout) btnCheckout.classList.toggle('active', !isCallback);
+    if (btnCallback) btnCallback.classList.toggle('active', isCallback);
+}
+
+function openLocalCallbackWindow() {
+    switchSandboxTab('callback');
+}
+
+function closeLocalCallbackWindow() {
+    switchSandboxTab('checkout');
+}
+
+function updateCompactCallbackSummaryPills(preflightData = null) {
+    const cfg = getLocalCallbackConfigObject();
+    const tenantPill = document.getElementById('cb-pill-tenant');
+    const contextPill = document.getElementById('cb-pill-context');
+    const preflightPill = document.getElementById('cb-pill-preflight');
+    const compactBadge = document.getElementById('localCallbackCompactBadge');
+    const headerBadge = document.getElementById('headerCallbackStatusBadge');
+
+    if (tenantPill) {
+        tenantPill.innerHTML = `Tenant: <strong>${cfg.customerShortname || 'DEV-LOCAL'}</strong>`;
+    }
+    if (contextPill) {
+        contextPill.innerHTML = `Context: <strong>${cfg.paymentContext || 'save_card'}</strong>`;
+    }
+    if (preflightData && preflightPill && Array.isArray(preflightData.checks)) {
+        const passedCount = preflightData.checks.filter(c => c.status === 'ok').length;
+        const totalCount = preflightData.checks.length;
+        preflightPill.classList.remove('health-ok', 'health-warn', 'health-error');
+        if (preflightData.overallStatus === 'ok') {
+            preflightPill.classList.add('health-ok');
+            preflightPill.innerHTML = `Pre-Flight: <strong>${passedCount}/${totalCount} OK ✅</strong>`;
+        } else if (preflightData.overallStatus === 'warn') {
+            preflightPill.classList.add('health-warn');
+            preflightPill.innerHTML = `Pre-Flight: <strong>${passedCount}/${totalCount} WARN ⚠️</strong>`;
+        } else {
+            preflightPill.classList.add('health-error');
+            preflightPill.innerHTML = `Pre-Flight: <strong>${passedCount}/${totalCount} ERR ❌</strong>`;
+        }
+    }
+
+    const enabled = isLocalCallbackEnabled();
+    const labelText = enabled
+        ? (preflightData ? (preflightData.allPassed ? 'AUTO-ON (OK)' : 'AUTO-ON (WARN)') : 'AUTO-ON')
+        : 'OFF';
+
+    [compactBadge, headerBadge].forEach(el => {
+        if (el) {
+            el.textContent = labelText;
+            el.classList.toggle('active', enabled);
+        }
+    });
+}
+
+function setupLocalCallbackPanel() {
+    const toggle = document.getElementById('localCallbackEnabled');
+    const compactToggle = document.getElementById('localCallbackEnabledCompact');
+    const bodyEl = document.getElementById('local-callback-body');
+    const badgeEl = document.getElementById('localCallbackStatusBadge');
+    const btnAutofill = document.getElementById('btn-cb-autofill');
+    const btnPreflight = document.getElementById('btn-cb-preflight');
+    const btnForwardNow = document.getElementById('btn-cb-forward-now');
+    const btnEncodeId = document.getElementById('btn-cb-encode-id');
+    const cbMerchantSelect = document.getElementById('cbMerchantSelect');
+    const cbEntitySelect = document.getElementById('cbEntitySelect');
+    const cbPaymentContext = document.getElementById('cbPaymentContext');
+    const btnOpenStudio = document.getElementById('btn-open-cb-window');
+    const btnOpenStudioHeader = document.getElementById('btn-open-cb-window-header');
+    const btnCloseStudio = document.getElementById('btn-close-cb-window');
+    const btnDoneStudio = document.getElementById('btn-done-cb-window');
+    const btnReplayCompact = document.getElementById('btn-cb-replay-compact');
+    const modalBackdrop = document.getElementById('local-callback-modal');
+
+    if (!toggle || !bodyEl) return;
+
+    // Restore persisted state from localStorage
+    const saved = loadLocalCallbackStateFromStorage();
+    if (saved) {
+        toggle.checked = Boolean(saved.enabled);
+        if (compactToggle) compactToggle.checked = Boolean(saved.enabled);
+        const setIfPresent = (id, val) => {
+            const el = document.getElementById(id);
+            if (el && val !== undefined && val !== '') el.value = val;
+        };
+        setIfPresent('cbCustomerShortname', saved.customerShortname);
+        setIfPresent('cbPaymentContext', saved.paymentContext);
+        setIfPresent('cbTargetServer', saved.targetServer);
+        setIfPresent('cbMerchantUuid', saved.merchantId || saved.merchantUuid);
+        setIfPresent('cbReferenceUuid', saved.reference || saved.referenceUuid);
+        setIfPresent('cbCustomerUuid', saved.customerRef || saved.customerUuid);
+        setIfPresent('cbLpWebhookSecret', saved.webhookSecret);
+        setIfPresent('cbLpProviderId', saved.paymentProviderId);
+        setIfPresent('cbLpFundingSourceId', saved.fundingSourceId);
+        setIfPresent('cbLpTransactionId', saved.transactionId);
+        setIfPresent('cbLpCardMask', saved.cardMask);
+        setIfPresent('cbLpCardExpiry', saved.cardExpiry);
+        setIfPresent('cbLpCardType', saved.cardType);
+        setIfPresent('cbMonerisTicket', saved.ticket);
+    }
+
+    const applyToggleUI = async (runDiscoveryOnEnable = false) => {
+        const enabled = toggle.checked;
+        if (compactToggle && compactToggle.checked !== enabled) {
+            compactToggle.checked = enabled;
+        }
+        if (badgeEl) {
+            badgeEl.textContent = enabled ? 'AUTO-ON' : 'OFF';
+            badgeEl.classList.toggle('active', enabled);
+        }
+        updateCompactCallbackSummaryPills();
+        saveLocalCallbackStateToStorage();
+        if (enabled) {
+            syncLocalCallbackToMainForm();
+            if (runDiscoveryOnEnable) {
+                await discoverAndAutoFillFromLocalDb(true);
+            }
+        }
+    };
+
+    toggle.addEventListener('change', () => {
+        applyToggleUI(true);
+    });
+
+    if (compactToggle) {
+        compactToggle.addEventListener('change', () => {
+            toggle.checked = compactToggle.checked;
+            applyToggleUI(true);
+        });
+    }
+
+    // Tab / Window open / close handlers
+    if (btnOpenStudio) {
+        btnOpenStudio.addEventListener('click', () => openLocalCallbackWindow());
+    }
+    if (btnOpenStudioHeader) {
+        btnOpenStudioHeader.addEventListener('click', () => openLocalCallbackWindow());
+    }
+    if (btnCloseStudio) {
+        btnCloseStudio.addEventListener('click', () => closeLocalCallbackWindow());
+    }
+    if (btnDoneStudio) {
+        btnDoneStudio.addEventListener('click', () => closeLocalCallbackWindow());
+    }
+
+    if (btnReplayCompact) {
+        btnReplayCompact.addEventListener('click', () => {
+            openLocalCallbackWindow();
+            forwardLocalCallbackToBackend({ autoTriggered: false });
+        });
+    }
+
+    if (btnAutofill) {
+        btnAutofill.addEventListener('click', () => discoverAndAutoFillFromLocalDb(true));
+    }
+    if (btnPreflight) {
+        btnPreflight.addEventListener('click', () => runLocalCallbackPreflightChecks());
+    }
+    if (btnForwardNow) {
+        btnForwardNow.addEventListener('click', () => forwardLocalCallbackToBackend({ autoTriggered: false }));
+    }
+
+    if (cbPaymentContext) {
+        cbPaymentContext.addEventListener('change', function() {
+            const ctx = this.value;
+            const cbReferenceUuid = document.getElementById('cbReferenceUuid');
+            const cbCustomerUuid = document.getElementById('cbCustomerUuid');
+            if (ctx === 'cart' && localDiscoveredDbEntities.carts.length > 0) {
+                const c = localDiscoveredDbEntities.carts[0];
+                if (cbReferenceUuid) cbReferenceUuid.value = c.customUuid;
+                if (cbCustomerUuid && c.passengerCustomUuid) cbCustomerUuid.value = c.passengerCustomUuid;
+            } else if (ctx === 'save_card' && cbCustomerUuid && cbCustomerUuid.value) {
+                if (cbReferenceUuid) cbReferenceUuid.value = cbCustomerUuid.value;
+            }
+            syncLocalCallbackToMainForm();
+            saveLocalCallbackStateToStorage();
+        });
+    }
+
+    if (cbMerchantSelect) {
+        cbMerchantSelect.addEventListener('change', function() {
+            const cbMerchantUuid = document.getElementById('cbMerchantUuid');
+            if (cbMerchantUuid && this.value) {
+                cbMerchantUuid.value = this.value;
+            }
+            const selectedOpt = this.options[this.selectedIndex];
+            if (selectedOpt) {
+                if (selectedOpt.dataset.secret) {
+                    const secretIn = document.getElementById('cbLpWebhookSecret');
+                    if (secretIn) secretIn.value = selectedOpt.dataset.secret;
+                }
+                if (selectedOpt.dataset.providerId) {
+                    const provIn = document.getElementById('cbLpProviderId');
+                    if (provIn) provIn.value = selectedOpt.dataset.providerId;
+                }
+            }
+            syncLocalCallbackToMainForm();
+            saveLocalCallbackStateToStorage();
+        });
+    }
+
+    if (cbEntitySelect) {
+        cbEntitySelect.addEventListener('change', function() {
+            const selectedOpt = this.options[this.selectedIndex];
+            if (!selectedOpt || !this.value) return;
+            const cbReferenceUuid = document.getElementById('cbReferenceUuid');
+            const cbCustomerUuid = document.getElementById('cbCustomerUuid');
+            if (cbReferenceUuid) cbReferenceUuid.value = this.value;
+            if (selectedOpt.dataset.passengerUuid && cbCustomerUuid) {
+                cbCustomerUuid.value = selectedOpt.dataset.passengerUuid;
+            }
+            syncLocalCallbackToMainForm();
+            saveLocalCallbackStateToStorage();
+        });
+    }
+
+    if (btnEncodeId) {
+        btnEncodeId.addEventListener('click', async () => {
+            const rawIdInput = document.getElementById('cbRawIdInput');
+            const targetSelect = document.getElementById('cbEncodeTargetField');
+            const shortnameInput = document.getElementById('cbCustomerShortname');
+            const rawId = rawIdInput ? rawIdInput.value.trim() : '';
+            if (!rawId) return;
+
+            btnEncodeId.disabled = true;
+            try {
+                const res = await fetch('/api/local-callback/preflight', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'encode_uuid',
+                        rawId: rawId,
+                        customerShortname: shortnameInput ? shortnameInput.value.trim() : 'DEV-LOCAL'
+                    })
+                });
+                const data = await res.json();
+                const encoded = data.customUuid || data.uuid;
+                if (encoded) {
+                    const mode = targetSelect ? targetSelect.value : 'customer_and_ref';
+                    const refEl = document.getElementById('cbReferenceUuid');
+                    const custEl = document.getElementById('cbCustomerUuid');
+                    const merchEl = document.getElementById('cbMerchantUuid');
+                    if (mode === 'customer_and_ref') {
+                        if (refEl) refEl.value = encoded;
+                        if (custEl) custEl.value = encoded;
+                    } else if (mode === 'reference') {
+                        if (refEl) refEl.value = encoded;
+                    } else if (mode === 'merchant') {
+                        if (merchEl) merchEl.value = encoded;
+                    }
+                    syncLocalCallbackToMainForm();
+                    saveLocalCallbackStateToStorage();
+                    log(`[Local Callback] Encoded raw ID #${rawId} (${data.customerShortname}) → ${encoded}`, 'success');
+                }
+            } catch (e) {
+                log(`[Local Callback Error] Failed to encode UUID: ${e.message}`, 'error');
+            } finally {
+                btnEncodeId.disabled = false;
+            }
+        });
+    }
+
+    // Sync manual input edits to main form & storage
+    const watchedIds = [
+        'cbCustomerShortname', 'cbPaymentContext', 'cbTargetServer',
+        'cbMerchantUuid', 'cbReferenceUuid', 'cbCustomerUuid',
+        'cbLpWebhookSecret', 'cbLpProviderId', 'cbLpFundingSourceId',
+        'cbLpTransactionId', 'cbLpCardMask', 'cbLpCardExpiry',
+        'cbLpCardType', 'cbMonerisTicket', 'cbMonerisShouldSaveCard',
+        'cbMonerisDarkMode', 'cbAutoConsumeQueue'
+    ];
+    watchedIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('change', () => {
+                syncLocalCallbackToMainForm();
+                updateCompactCallbackSummaryPills();
+                saveLocalCallbackStateToStorage();
+            });
+            el.addEventListener('input', () => {
+                updateCompactCallbackSummaryPills();
+                saveLocalCallbackStateToStorage();
+            });
+        }
+    });
+
+    // Delegated listener for 1-Click Fix buttons in preflight results & inline forward buttons in receipt cards
+    document.addEventListener('click', async (e) => {
+        const fixBtn = e.target.closest('.btn-preflight-fix');
+        if (fixBtn) {
+            try {
+                const fixAction = JSON.parse(fixBtn.getAttribute('data-fix'));
+                if (fixAction.type === 'auto_fill') {
+                    await discoverAndAutoFillFromLocalDb(true);
+                } else if (fixAction.type === 'select_merchant' && fixAction.merchant) {
+                    const cbMerchantUuid = document.getElementById('cbMerchantUuid');
+                    const cbMerchantSelect = document.getElementById('cbMerchantSelect');
+                    if (cbMerchantUuid) cbMerchantUuid.value = fixAction.merchant.customUuid;
+                    if (cbMerchantSelect) cbMerchantSelect.value = fixAction.merchant.customUuid;
+                    syncLocalCallbackToMainForm();
+                    saveLocalCallbackStateToStorage();
+                    await runLocalCallbackPreflightChecks();
+                } else if (fixAction.type === 'set_webhook_secret' && fixAction.value) {
+                    const el = document.getElementById('cbLpWebhookSecret');
+                    if (el) el.value = fixAction.value;
+                    saveLocalCallbackStateToStorage();
+                    await runLocalCallbackPreflightChecks();
+                } else if (fixAction.type === 'sync_reference_to_customer' && fixAction.value) {
+                    const el = document.getElementById('cbReferenceUuid');
+                    if (el) el.value = fixAction.value;
+                    syncLocalCallbackToMainForm();
+                    saveLocalCallbackStateToStorage();
+                    await runLocalCallbackPreflightChecks();
+                } else if (fixAction.type === 'select_cart' && fixAction.cart) {
+                    const refEl = document.getElementById('cbReferenceUuid');
+                    const custEl = document.getElementById('cbCustomerUuid');
+                    if (refEl) refEl.value = fixAction.cart.customUuid;
+                    if (custEl && fixAction.cart.passengerCustomUuid) custEl.value = fixAction.cart.passengerCustomUuid;
+                    syncLocalCallbackToMainForm();
+                    saveLocalCallbackStateToStorage();
+                    await runLocalCallbackPreflightChecks();
+                } else if (fixAction.type === 'switch_target_server' && fixAction.value) {
+                    const srvEl = document.getElementById('cbTargetServer');
+                    if (srvEl) srvEl.value = fixAction.value;
+                    saveLocalCallbackStateToStorage();
+                    await runLocalCallbackPreflightChecks();
+                } else if ((fixAction.type === 'fix_cart_status' || fixAction.type === 'reset_cart_status') && fixAction.cartId) {
+                    fixBtn.disabled = true;
+                    fixBtn.textContent = '⏳ Resetting...';
+                    await fetch('/api/local-callback/preflight', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            action: 'fix_cart_status',
+                            cartIdOrUuid: fixAction.cartId,
+                            status: 'WAITING_PAYMENT'
+                        })
+                    });
+                    log(`[Local Callback] Reset ShoppingCart #${fixAction.cartId} status to WAITING_PAYMENT.`, 'success');
+                    await runLocalCallbackPreflightChecks();
+                }
+            } catch (err) {
+                log(`[Local Callback Fix Error] ${err.message}`, 'error');
+            }
+        }
+
+        const inlineForwardBtn = e.target.closest('.btn-forward-callback-inline');
+        if (inlineForwardBtn) {
+            const pspId = inlineForwardBtn.getAttribute('data-psp') || getSelectedPsp().id;
+            const orderId = inlineForwardBtn.getAttribute('data-order-id') || '';
+            const ticket = inlineForwardBtn.getAttribute('data-ticket') || '';
+            inlineForwardBtn.disabled = true;
+            const prevText = inlineForwardBtn.textContent;
+            inlineForwardBtn.textContent = '⏳ Forwarding Callback to Local Backend...';
+            try {
+                const res = await forwardLocalCallbackToBackend({ psp: pspId, orderId, ticket, autoTriggered: false });
+                if (res && res.ok) {
+                    inlineForwardBtn.textContent = '✅ Callback Forwarded & Persisted in Local DB!';
+                } else {
+                    inlineForwardBtn.textContent = prevText;
+                }
+            } catch (err) {
+                inlineForwardBtn.textContent = prevText;
+            } finally {
+                setTimeout(() => {
+                    inlineForwardBtn.disabled = false;
+                }, 1500);
+            }
+        }
+    });
+
+    // Initialize UI state
+    applyToggleUI(toggle.checked);
+    setupMonerisProfileAndServerControl();
+}
 
 // =========================================================================
 // Moneris Checkout Profile Manager & Sandbox Server Restart Control

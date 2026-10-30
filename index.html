@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multi-PSP Checkout Demo (Littlepay & Moneris)</title>
-    <link rel="stylesheet" href="style.css?v=6">
+    <link rel="stylesheet" href="style.css?v=10">
     <!-- Google Fonts for Rubik and Roboto -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -30,7 +30,29 @@
         </div>
     </header>
 
-    <main class="container app-grid">
+    <!-- Top-Level Sandbox Navigation Tabs -->
+    <div class="sandbox-tabs-bar" id="sandbox-tabs-bar">
+        <div class="container sandbox-tabs-container">
+            <div class="sandbox-tabs-list" role="tablist" aria-label="Sandbox Workspace Tabs">
+                <button type="button" role="tab" aria-selected="true" id="tab-btn-checkout" class="sandbox-tab-btn active" data-tab="checkout">
+                    <span class="tab-btn-icon">💳</span>
+                    <span class="tab-btn-label">Checkout &amp; Payment Playground</span>
+                </button>
+                <button type="button" role="tab" aria-selected="false" id="tab-btn-callback" class="sandbox-tab-btn" data-tab="callback">
+                    <span class="tab-btn-icon">🔄</span>
+                    <span class="tab-btn-label">Local Backend Callback (<code>wfwp-platform</code>)</span>
+                    <span class="header-cb-badge active" id="headerCallbackStatusBadge">AUTO-ON</span>
+                    <span class="cb-meta-pill cb-pill-health" id="cb-pill-preflight">Pre-Flight: <strong>Checking…</strong></span>
+                </button>
+            </div>
+            <div class="sandbox-tabs-meta">
+                <span class="cb-meta-pill" id="cb-pill-tenant">Tenant: <strong>DEV-LOCAL</strong></span>
+                <span class="cb-meta-pill" id="cb-pill-context">Context: <strong>save_card</strong></span>
+            </div>
+        </div>
+    </div>
+
+    <main id="tab-view-checkout" class="container app-grid">
         <!-- Configuration Section -->
         <section class="config-panel card">
             <div class="card-header">
@@ -59,17 +81,17 @@
                 <div id="auto-token-fields">
                     <div class="form-group">
                         <label for="customerRef">Customer Reference (PassengerAccountUuid)</label>
-                        <input type="text" id="customerRef" value="1" placeholder="e.g. 1">
+                        <input type="text" id="customerRef" value="c00002c2-e000-5e08-a01a-00da57b0c000" placeholder="e.g. c00002c2-e000-5e08-a01a-00da57b0c000">
                     </div>
 
                     <div class="form-row">
                         <div class="form-group">
                             <label for="orderAmount">Amount (Minor Units)</label>
-                            <input type="text" id="orderAmount" value="811" placeholder="e.g. 811 (8.11)">
+                            <input type="text" id="orderAmount" value="0" placeholder="e.g. 0 (Save Card) or 811 (8.11)">
                         </div>
                         <div class="form-group">
                             <label for="orderCurrency">Currency</label>
-                            <input type="text" id="orderCurrency" value="EUR" placeholder="e.g. EUR">
+                            <input type="text" id="orderCurrency" value="CAD" placeholder="e.g. CAD">
                         </div>
                     </div>
 
@@ -83,19 +105,19 @@
                             <!-- Default Row 1: reference -->
                             <div class="metadata-row" style="display: flex; gap: 8px; align-items: center;">
                                 <input type="text" class="metadata-key" value="reference" placeholder="Key" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
-                                <input type="text" class="metadata-value" value="test-Tung" placeholder="Value" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
+                                <input type="text" class="metadata-value" value="c00002c2-e000-5e08-a01a-00da57b0c000" placeholder="Value" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
                                 <button type="button" class="btn-remove-row" style="background: none; border: none; color: var(--error); font-size: 1.25rem; cursor: pointer; padding: 0 4px; line-height: 1;">×</button>
                             </div>
                             <!-- Default Row 2: merchant_id -->
                             <div class="metadata-row" style="display: flex; gap: 8px; align-items: center;">
                                 <input type="text" class="metadata-key" value="merchant_id" placeholder="Key" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
-                                <input type="text" class="metadata-value" value="sandbox-merchant-demo" placeholder="Value" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
+                                <input type="text" class="metadata-value" value="0cd00307-cae0-5003-a0e0-0c0002150000" placeholder="Value" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
                                 <button type="button" class="btn-remove-row" style="background: none; border: none; color: var(--error); font-size: 1.25rem; cursor: pointer; padding: 0 4px; line-height: 1;">×</button>
                             </div>
                             <!-- Default Row 3: payment_context -->
                             <div class="metadata-row" style="display: flex; gap: 8px; align-items: center;">
                                 <input type="text" class="metadata-key" value="payment_context" placeholder="Key" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
-                                <input type="text" class="metadata-value" value="MIT-Registration" placeholder="Value" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
+                                <input type="text" class="metadata-value" value="save_card" placeholder="Value" style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
                                 <button type="button" class="btn-remove-row" style="background: none; border: none; color: var(--error); font-size: 1.25rem; cursor: pointer; padding: 0 4px; line-height: 1;">×</button>
                             </div>
                         </div>
@@ -259,7 +281,6 @@
                     <div id="moneris-profile-status-banner" class="moneris-profile-status hidden"></div>
                 </div>
 
-
                 <div id="moneris-vault-settings-container" style="display: none;">
                     <div class="form-group">
                         <label for="monerisSavedTokensSelect">Saved Moneris Vault Tokens</label>
@@ -364,6 +385,297 @@
         </section>
     </main>
 
+    <!-- Dedicated Local Backend Callback Tab View -->
+    <section id="tab-view-callback" class="container tab-view-callback hidden" role="tabpanel" aria-labelledby="tab-btn-callback">
+        <div class="local-cb-window local-cb-tab-surface" id="local-callback-panel">
+            <!-- Studio Tab Top Bar -->
+            <div class="local-cb-window-header">
+                <div class="local-cb-window-brand">
+                    <span class="local-callback-icon">🔄</span>
+                    <div>
+                        <div class="local-cb-window-title-row">
+                            <h2 class="local-cb-window-title" id="local-cb-window-title">Local Backend Callback Studio</h2>
+                            <span class="local-cb-window-chip" id="cb-window-psp-chip">LITTLEPAY</span>
+                            <code class="local-cb-window-route">POST /billing/payment/callback/{customerShortname}</code>
+                        </div>
+                        <p class="local-cb-window-subtitle">Configure local server target, run 6 pre-flight setup checks, and verify PostgreSQL persistence.</p>
+                    </div>
+                </div>
+
+                <div class="local-cb-window-controls">
+                    <label class="local-cb-switch" title="When enabled, every completed payment automatically forwards its callback to your local server">
+                        <input type="checkbox" id="localCallbackEnabled" checked>
+                        <span class="local-cb-slider"></span>
+                        <span class="local-cb-status-label active" id="localCallbackStatusBadge">AUTO-ON</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- 4-Step Visual Workflow Stepper Bar -->
+            <div class="local-cb-stepper" id="local-cb-stepper">
+                <div class="local-cb-step active" id="cb-step-1" data-step="1">
+                    <span class="step-num">1</span>
+                    <div class="step-text-wrap">
+                        <span class="step-label">Pre-Flight Checks</span>
+                        <span class="step-desc">Docker, DB &amp; Auth</span>
+                    </div>
+                </div>
+                <div class="local-cb-step-line"></div>
+                <div class="local-cb-step" id="cb-step-2" data-step="2">
+                    <span class="step-num">2</span>
+                    <div class="step-text-wrap">
+                        <span class="step-label">Configure Context &amp; UUIDs</span>
+                        <span class="step-desc">Tenant, Merchant &amp; Entity</span>
+                    </div>
+                </div>
+                <div class="local-cb-step-line"></div>
+                <div class="local-cb-step" id="cb-step-3" data-step="3">
+                    <span class="step-num">3</span>
+                    <div class="step-text-wrap">
+                        <span class="step-label">Pay or Replay Callback</span>
+                        <span class="step-desc">Webhook / Ticket POST</span>
+                    </div>
+                </div>
+                <div class="local-cb-step-line"></div>
+                <div class="local-cb-step" id="cb-step-4" data-step="4">
+                    <span class="step-num">4</span>
+                    <div class="step-text-wrap">
+                        <span class="step-label">PostgreSQL Persisted</span>
+                        <span class="step-desc">Tokens, Sales &amp; Carts</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2-Column Studio Body -->
+            <div class="local-cb-window-grid" id="local-callback-body">
+                <!-- LEFT COLUMN: Step-by-Step Configuration & Manual Parameters -->
+                <div class="local-cb-col local-cb-col-config">
+                    <!-- Section A: Target Environment & Payment Context -->
+                    <div class="local-cb-section-card">
+                        <div class="local-cb-section-header">
+                            <span class="local-cb-section-badge">Step A</span>
+                            <h3 class="local-cb-section-title">Target Server &amp; Payment Context</h3>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="cbCustomerShortname">Tenant (<code>customerShortname</code>)</label>
+                                <input type="text" id="cbCustomerShortname" value="DEV-LOCAL" placeholder="DEV-LOCAL">
+                            </div>
+                            <div class="form-group">
+                                <label for="cbPaymentContext">Payment Context</label>
+                                <select id="cbPaymentContext">
+                                    <option value="save_card" selected>save_card (Save Card Token)</option>
+                                    <option value="cart">cart (Shopping Cart Sale)</option>
+                                    <option value="ewallet_reload">ewallet_reload (eWallet Reload)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="cbTargetServer">Target Local Server (<code>wfwp-platform</code>)</label>
+                            <select id="cbTargetServer">
+                                <option value="auto" selected>Auto-Detect Best Container (Port 8099 Sandbox → Port 80)</option>
+                                <option value="http://127.0.0.1:8099">Port 8099 — wfwp-moneris-sandbox (Moneris &amp; LittlePay)</option>
+                                <option value="http://127.0.0.1:80">Port 80 — wfwp-platform.wandev (Traefik)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Section B: Local Database Entities & Custom UUIDs -->
+                    <div class="local-cb-section-card">
+                        <div class="local-cb-section-header">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span class="local-cb-section-badge">Step B</span>
+                                <h3 class="local-cb-section-title">Database Entities &amp; Custom UUIDs (<code>UuidV5</code>)</h3>
+                            </div>
+                            <button type="button" id="btn-cb-autofill" class="btn-cb-action btn-cb-primary" title="Discover merchants, carts &amp; passenger UUIDs from local PostgreSQL DB and populate fields">
+                                ⚡ Auto-Fill from Local DB
+                            </button>
+                        </div>
+
+                        <!-- Quick DB Pickers -->
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="cbMerchantSelect">DB Merchant (<code>fare_merchants</code>)</label>
+                                <select id="cbMerchantSelect">
+                                    <option value="">-- Click Auto-Fill to load DB merchants --</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="cbEntitySelect">DB Passenger / ShoppingCart</label>
+                                <select id="cbEntitySelect">
+                                    <option value="">-- Click Auto-Fill to load DB entities --</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="cbMerchantUuid">Merchant Custom UUID (<code>merchant_id</code>)</label>
+                            <input type="text" id="cbMerchantUuid" class="mono-input" value="a002c7e7-0030-500a-a000-0150c00ecd00" placeholder="e.g. a002c7e7-0030-500a-a000-0150c00ecd00">
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="cbReferenceUuid">Reference UUID (<code>reference</code>)</label>
+                                <input type="text" id="cbReferenceUuid" class="mono-input" value="c00002c2-e000-5e08-a01a-00da57b0c000" placeholder="Passenger or Cart UUID">
+                            </div>
+                            <div class="form-group">
+                                <label for="cbCustomerUuid">Customer UUID (<code>PassengerAccountUuid</code>)</label>
+                                <input type="text" id="cbCustomerUuid" class="mono-input" value="c00002c2-e000-5e08-a01a-00da57b0c000" placeholder="PassengerAccountUuid">
+                            </div>
+                        </div>
+
+                        <!-- Custom UUID Encoder Helper -->
+                        <div class="local-cb-uuid-helper">
+                            <span class="uuid-helper-label">🔢 Encode Raw DB Integer ID → Custom UUID:</span>
+                            <div class="uuid-helper-row">
+                                <input type="text" id="cbRawIdInput" placeholder="DB ID (e.g. 2858)" style="width: 120px;">
+                                <select id="cbEncodeTargetField" style="flex: 1;">
+                                    <option value="customer_and_ref">Apply to Customer + Reference</option>
+                                    <option value="reference">Apply to Reference only</option>
+                                    <option value="merchant">Apply to Merchant only</option>
+                                </select>
+                                <button type="button" id="btn-cb-encode-id" class="btn-cb-mini">Encode UUID</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Section C: PSP Security & Webhook Payload Parameters -->
+                    <div class="local-cb-section-card">
+                        <div class="local-cb-section-header">
+                            <span class="local-cb-section-badge">Step C</span>
+                            <h3 class="local-cb-section-title">PSP Callback Payload &amp; Security Parameters</h3>
+                        </div>
+
+                        <!-- LittlePay Specific Callback Parameters -->
+                        <div id="cb-littlepay-fields" class="local-cb-psp-box">
+                            <div class="local-cb-psp-box-title">LittlePay Webhook Synthesis (<code>charge.authorisation.succeeded</code>)</div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="cbLpWebhookSecret">Webhook HMAC Secret</label>
+                                    <input type="text" id="cbLpWebhookSecret" class="mono-input" value="test_secret_12345" placeholder="test_secret_12345">
+                                </div>
+                                <div class="form-group">
+                                    <label for="cbLpProviderId">Payment Provider ID</label>
+                                    <input type="text" id="cbLpProviderId" class="mono-input" value="matawan-testportal" placeholder="matawan-testportal">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="cbLpFundingSourceId">Funding Source ID (Token)</label>
+                                    <input type="text" id="cbLpFundingSourceId" class="mono-input" placeholder="Auto-filled on checkout or manual">
+                                </div>
+                                <div class="form-group">
+                                    <label for="cbLpTransactionId">Transaction / Intent ID</label>
+                                    <input type="text" id="cbLpTransactionId" class="mono-input" placeholder="Auto-filled on checkout or manual">
+                                </div>
+                            </div>
+                            <div class="form-row" style="margin-bottom: 0;">
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label for="cbLpCardMask">Card Mask</label>
+                                    <input type="text" id="cbLpCardMask" class="mono-input" value="************4242" placeholder="************4242">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label for="cbLpCardExpiry">Expiry &amp; Brand</label>
+                                    <div style="display: flex; gap: 6px;">
+                                        <input type="text" id="cbLpCardExpiry" class="mono-input" value="12/28" placeholder="12/28" style="width: 50%;">
+                                        <input type="text" id="cbLpCardType" class="mono-input" value="VISA" placeholder="VISA" style="width: 50%;">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Moneris Specific Callback Parameters -->
+                        <div id="cb-moneris-fields" class="local-cb-psp-box" style="display: none;">
+                            <div class="local-cb-psp-box-title">Moneris Callback Payload (<code>X-Payment-Provider: moneris</code>)</div>
+                            <div class="form-group">
+                                <label for="cbMonerisTicket">MCO Ticket (<code>ticket</code>)</label>
+                                <input type="text" id="cbMonerisTicket" class="mono-input" placeholder="Auto-populated from Moneris Checkout or paste ticket">
+                            </div>
+                            <div class="form-row" style="margin-bottom: 0;">
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label for="cbMonerisShouldSaveCard">Should Save Card</label>
+                                    <select id="cbMonerisShouldSaveCard">
+                                        <option value="true" selected>true</option>
+                                        <option value="false">false</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label for="cbMonerisDarkMode">Dark Mode</label>
+                                    <select id="cbMonerisDarkMode">
+                                        <option value="false" selected>false</option>
+                                        <option value="true">true</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <label class="local-cb-checkbox-row" style="margin-top: 12px;">
+                            <input type="checkbox" id="cbAutoConsumeQueue" checked>
+                            <span>Auto-consume <code>billing_sale_event_transport</code> queue to persist in PostgreSQL immediately</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- RIGHT COLUMN: Pre-Flight Diagnostics, Execution & Live DB Persistence -->
+                <div class="local-cb-col local-cb-col-diagnostics">
+                    <!-- Section D: 6 Pre-Flight Setup Checks -->
+                    <div class="local-cb-section-card">
+                        <div class="local-cb-section-header">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span class="local-cb-section-badge">Step 1</span>
+                                <h3 class="local-cb-section-title">Pre-Flight Setup Checks (6/6)</h3>
+                            </div>
+                            <button type="button" id="btn-cb-preflight" class="btn-cb-action" title="Verify Docker container, Custom UUIDs, Merchant DB, Auth secrets &amp; Cart status">
+                                🩺 Run Pre-Flight Checks
+                            </button>
+                        </div>
+
+                        <div id="local-cb-preflight-results" class="local-cb-preflight-results">
+                            <div class="local-cb-empty-state">
+                                Click <strong>🩺 Run Pre-Flight Checks</strong> or <strong>⚡ Auto-Fill from Local DB</strong> to validate your local setup.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Section E: Manual Trigger & Live PostgreSQL Persistence Inspector -->
+                    <div class="local-cb-section-card local-cb-execution-card">
+                        <div class="local-cb-section-header">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span class="local-cb-section-badge">Step 3 &amp; 4</span>
+                                <h3 class="local-cb-section-title">Forward Callback &amp; Verify Local DB Persistence</h3>
+                            </div>
+                        </div>
+
+                        <p class="local-cb-exec-help">
+                            When <strong>AUTO-ON</strong> is active, callbacks are sent automatically after each checkout. You can also trigger or replay a callback manually with the parameters on the left:
+                        </p>
+
+                        <div class="local-cb-footer-actions">
+                            <button type="button" id="btn-cb-forward-now" class="btn-cb-forward">
+                                🚀 Forward / Replay Callback to Local Server Now
+                            </button>
+                        </div>
+
+                        <!-- Live DB Persistence Verification Output -->
+                        <div id="local-cb-persistence-result" class="local-cb-persistence-result">
+                            <div class="local-cb-empty-state">
+                                Complete a payment or click <strong>🚀 Forward / Replay Callback Now</strong> to inspect newly persisted records in <code>fare_payment_tokens</code>, <code>fare_sales</code>, and <code>shopping_carts</code>.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Studio Tab Footer -->
+            <div class="local-cb-window-footer">
+                <span class="local-cb-footer-note">💡 All settings are automatically synced to the Checkout Setup form and saved in <code>localStorage</code>.</span>
+                <button type="button" id="btn-done-cb-window" class="btn btn-primary" style="width: auto; padding: 8px 22px; font-size: 0.85rem;">← Back to Checkout Playground</button>
+            </div>
+        </div>
+    </section>
+
     <footer class="app-footer">
         <div class="container footer-container">
             <p>&copy; 2026 Payment Gateway Demo. For developer sandbox usage only.</p>
@@ -374,6 +686,6 @@
     <script src="https://static.checkout.sandbox.littlepay.com/littlepay-checkout-v2.min.js"></script>
     <!-- Moneris Checkout JS SDK Sandbox -->
     <script src="https://gatewayt.moneris.com/chktv2/js/chkt_v2.00.js"></script>
-    <script src="app.js?v=8"></script>
+    <script src="app.js?v=13"></script>
 </body>
 </html>

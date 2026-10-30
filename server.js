@@ -653,6 +653,1168 @@ async function handleLittlepaySession(sessionParams, res) {
     }
 }
 
+// =============================================================================
+// LOCAL BACKEND CALLBACK FORWARDING & PRE-FLIGHT DIAGNOSTICS (wfwp-platform)
+// =============================================================================
+
+/**
+ * Promise wrapper around Node's native HTTP/HTTPS request module for local & upstream endpoints
+ */
+function makeHttpRequest(urlStr, method, headers, requestBody, timeoutMs = 12000) {
+    return new Promise((resolve, reject) => {
+        try {
+            const parsedUrl = new url.URL(urlStr);
+            const isHttps = parsedUrl.protocol === 'https:';
+            const client = isHttps ? https : http;
+            const defaultPort = isHttps ? 443 : 80;
+
+            const reqHeaders = { ...headers };
+            if (requestBody !== undefined && requestBody !== null) {
+                reqHeaders['Content-Length'] = Buffer.byteLength(requestBody);
+            }
+
+            const options = {
+                hostname: parsedUrl.hostname,
+                port: parsedUrl.port ? Number(parsedUrl.port) : defaultPort,
+                path: parsedUrl.pathname + parsedUrl.search,
+                method: method,
+                headers: reqHeaders,
+                timeout: timeoutMs
+            };
+
+            const req = client.request(options, (res) => {
+                let resBody = '';
+                res.on('data', (chunk) => {
+                    resBody += chunk;
+                });
+                res.on('end', () => {
+                    resolve({
+                        statusCode: res.statusCode,
+                        statusMessage: res.statusMessage,
+                        headers: res.headers,
+                        body: resBody
+                    });
+                });
+            });
+
+            req.on('timeout', () => {
+                req.destroy(new Error(`Request timed out after ${timeoutMs}ms (${urlStr})`));
+            });
+
+            req.on('error', (err) => {
+                reject(err);
+            });
+
+            if (requestBody !== undefined && requestBody !== null) {
+                req.write(requestBody);
+            }
+            req.end();
+        } catch (err) {
+            reject(err);
+        }
+    });
+}
+
+/**
+ * Executes a CLI command using execFile (safe from shell injection)
+ */
+function execCommandPromise(cmd, args = [], timeoutMs = 10000) {
+    return new Promise((resolve) => {
+        execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+            resolve({
+                ok: !err,
+                code: err ? (err.code || 1) : 0,
+                stdout: (stdout || '').trim(),
+                stderr: (stderr || (err ? err.message : '')).trim()
+            });
+        });
+    });
+}
+
+/**
+ * Inspects running Docker containers relevant to wfwp-platform local callback processing
+ */
+async function inspectLocalDockerContainers() {
+    const psRes = await execCommandPromise('docker', ['ps', '--format', '{{.Names}}|{{.Status}}|{{.Ports}}'], 5000);
+    if (!psRes.ok) {
+        return {
+            dockerRunning: false,
+            error: psRes.stderr || 'Docker daemon is not reachable',
+            containers: {}
+        };
+    }
+
+    const containers = {};
+    const lines = psRes.stdout.split('\n').filter(Boolean);
+    for (const line of lines) {
+        const [name, status, ports] = line.split('|');
+        if (name) {
+            containers[name.trim()] = {
+                name: name.trim(),
+                status: (status || '').trim(),
+                ports: (ports || '').trim()
+            };
+        }
+    }
+
+    return {
+        dockerRunning: true,
+        containers
+    };
+}
+
+/**
+ * Selects the best available wfwp-platform PHP container and target base URL
+ */
+function resolveTargetContainerAndUrl(dockerInfo, targetServerPref = 'auto', psp = 'littlepay') {
+    const containers = (dockerInfo && dockerInfo.containers) || {};
+    const hasMonerisSandbox = Boolean(containers['wfwp-moneris-sandbox']);
+    const hasMainPlatform = Boolean(containers['wfwp-platform-php-1']);
+
+    if (targetServerPref === 'http://127.0.0.1:8099' || targetServerPref === '8099') {
+        return {
+            containerName: hasMonerisSandbox ? 'wfwp-moneris-sandbox' : (hasMainPlatform ? 'wfwp-platform-php-1' : 'wfwp-moneris-sandbox'),
+            baseUrl: 'http://127.0.0.1:8099',
+            hostHeader: 'wfwp-platform.wandev',
+            mode: 'sandbox-8099'
+        };
+    }
+
+    if (targetServerPref === 'http://127.0.0.1:80' || targetServerPref === '80') {
+        return {
+            containerName: hasMainPlatform ? 'wfwp-platform-php-1' : (hasMonerisSandbox ? 'wfwp-moneris-sandbox' : 'wfwp-platform-php-1'),
+            baseUrl: 'http://127.0.0.1:80',
+            hostHeader: 'wfwp-platform.wandev',
+            mode: 'traefik-80'
+        };
+    }
+
+    if (targetServerPref && targetServerPref !== 'auto' && targetServerPref.startsWith('http')) {
+        const useSandbox = targetServerPref.includes('8099');
+        return {
+            containerName: useSandbox && hasMonerisSandbox ? 'wfwp-moneris-sandbox' : (hasMainPlatform ? 'wfwp-platform-php-1' : 'wfwp-moneris-sandbox'),
+            baseUrl: targetServerPref.replace(/\/$/, ''),
+            hostHeader: 'wfwp-platform.wandev',
+            mode: 'custom'
+        };
+    }
+
+    // Auto mode: prefer wfwp-moneris-sandbox (port 8099) if running because it supports both Moneris & LittlePay callbacks
+    if (hasMonerisSandbox) {
+        return {
+            containerName: 'wfwp-moneris-sandbox',
+            baseUrl: 'http://127.0.0.1:8099',
+            hostHeader: 'wfwp-platform.wandev',
+            mode: 'auto-8099'
+        };
+    }
+
+    return {
+        containerName: 'wfwp-platform-php-1',
+        baseUrl: 'http://127.0.0.1:80',
+        hostHeader: 'wfwp-platform.wandev',
+        mode: 'auto-80'
+    };
+}
+
+/**
+ * Runs a small PHP diagnostic / DB / UUID helper inside the wfwp-platform container
+ */
+async function runLocalPhpBridge(containerName, payloadObj) {
+    const phpScript = `
+require '/projects/services/app/vendor/autoload.php';
+if (class_exists(\\Symfony\\Component\\Dotenv\\Dotenv::class) && file_exists('/projects/services/app/.env')) {
+    (new \\Symfony\\Component\\Dotenv\\Dotenv())->usePutenv()->bootEnv('/projects/services/app/.env');
+}
+$input = json_decode(base64_decode($argv[1] ?? ''), true) ?: [];
+$action = $input['action'] ?? 'discover';
+$customer = $input['customerShortname'] ?? 'DEV-LOCAL';
+$secret = $_ENV['LITTLEPAY_ENCRYPTION_SECRET'] ?? getenv('LITTLEPAY_ENCRYPTION_SECRET') ?: '';
+
+$decryptFn = function (?string $enc) use ($secret): ?string {
+    if (!$enc || !$secret) return null;
+    try {
+        if (class_exists(\\App\\Billing\\Security\\EncryptionManager::class)) {
+            return (new \\App\\Billing\\Security\\EncryptionManager($secret))->decrypt($enc);
+        }
+    } catch (\\Throwable $e) {
+        return null;
+    }
+    return null;
+};
+
+$encodeUuid = function ($id) use ($customer): ?string {
+    if ($id === null || $id === '') return null;
+    try {
+        return \\Ubitransports\\CustomUuid\\Encoder\\UuidEncoder::encode($customer, (string) $id);
+    } catch (\\Throwable $e) {
+        return null;
+    }
+};
+
+$decodeUuid = function (?string $uuid) use ($customer): ?string {
+    if (!$uuid) return null;
+    try {
+        return \\Ubitransports\\CustomUuid\\Encoder\\UuidDecoder::decode($customer, $uuid);
+    } catch (\\Throwable $e) {
+        return null;
+    }
+};
+
+$isValidUuidV5 = function (?string $uuid): bool {
+    if (!$uuid) return false;
+    try {
+        return \\Symfony\\Component\\Uid\\UuidV5::isValid($uuid);
+    } catch (\\Throwable $e) {
+        return false;
+    }
+};
+
+$securityYaml = @file_get_contents('/projects/services/app/config/packages/security.yaml') ?: '';
+$authenticators = [
+    'littlepay' => strpos($securityYaml, 'LittlepayCallbackAuthenticator') !== false,
+    'moneris' => strpos($securityYaml, 'MonerisCallbackAuthenticator') !== false,
+];
+
+$pdo = null;
+$dbError = null;
+try {
+    $pdo = new PDO('pgsql:host=2cloud-postgres_main-1;port=5432;dbname=postgres', 'www-data', 'ubitransport', [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_TIMEOUT => 3,
+    ]);
+} catch (\\Throwable $e) {
+    $dbError = $e->getMessage();
+}
+
+if ($action === 'encode_uuid') {
+    $rawId = (string) ($input['rawId'] ?? '');
+    echo json_encode([
+        'ok' => true,
+        'customerShortname' => $customer,
+        'rawId' => $rawId,
+        'customUuid' => $encodeUuid($rawId),
+    ]);
+    exit(0);
+}
+
+if ($action === 'fix_cart_status' && $pdo) {
+    $cartIdOrUuid = (string) ($input['cartIdOrUuid'] ?? $input['cartId'] ?? '');
+    $targetStatus = (string) ($input['status'] ?? 'WAITING_PAYMENT');
+    $decodedId = ctype_digit($cartIdOrUuid) ? (int) $cartIdOrUuid : (int) $decodeUuid($cartIdOrUuid);
+    if ($decodedId <= 0) {
+        echo json_encode(['ok' => false, 'error' => 'Could not resolve a valid integer ShoppingCart ID from: ' . $cartIdOrUuid]);
+        exit(0);
+    }
+    $stmt = $pdo->prepare('UPDATE shopping_carts SET status = :st, modified = NOW() WHERE id = :id RETURNING id, status, merchant_id, passenger_account_id');
+    $stmt->execute(['st' => $targetStatus, 'id' => $decodedId]);
+    $updated = $stmt->fetch();
+    echo json_encode([
+        'ok' => (bool) $updated,
+        'updatedCart' => $updated,
+        'customUuid' => $updated ? $encodeUuid($updated['id']) : null,
+    ]);
+    exit(0);
+}
+
+if ($action === 'update_moneris_profiles' && $pdo) {
+    $profilesMap = $input['profilesMap'] ?? [];
+    if (!is_array($profilesMap) || empty($profilesMap)) {
+        echo json_encode(['ok' => false, 'error' => 'profilesMap is required']);
+        exit(0);
+    }
+    $mRows = $pdo->query("SELECT id, name, payment_provider_configuration FROM fare_merchants WHERE payment_provider_name = 'MONERIS' AND deleted IS NULL ORDER BY id ASC")->fetchAll();
+    $updatedMerchants = [];
+    foreach ($mRows as $m) {
+        $details = json_decode($m['payment_provider_configuration'] ?? '{}', true) ?: [];
+        $newProfiles = [];
+        foreach ($profilesMap as $alias => $idVal) {
+            if (!empty($idVal) && $idVal !== 'FILLME') {
+                $newProfiles[] = [
+                    'id' => (string) $idVal,
+                    'alias' => (string) $alias,
+                ];
+            }
+        }
+        $details['checkoutProfiles'] = $newProfiles;
+        $upd = $pdo->prepare('UPDATE fare_merchants SET payment_provider_configuration = :cfg, modified = NOW() WHERE id = :id');
+        $upd->execute([
+            'cfg' => json_encode($details, JSON_UNESCAPED_SLASHES),
+            'id' => (int) $m['id'],
+        ]);
+        $updatedMerchants[] = [
+            'id' => (int) $m['id'],
+            'name' => $m['name'],
+            'checkoutProfiles' => $newProfiles,
+        ];
+    }
+    echo json_encode([
+        'ok' => true,
+        'updatedMerchants' => $updatedMerchants,
+    ]);
+    exit(0);
+}
+
+$merchants = [];
+$shoppingCarts = [];
+$recentTokens = [];
+$recentSales = [];
+
+if ($pdo) {
+    $mRows = $pdo->query('SELECT id, name, payment_provider_name AS payment_service_provider, payment_provider_id, payment_provider_configuration AS details FROM fare_merchants WHERE deleted IS NULL ORDER BY id ASC')->fetchAll();
+    foreach ($mRows as $m) {
+        $details = json_decode($m['details'] ?? '{}', true) ?: [];
+        $decryptedApiToken = null;
+        $checkoutProfiles = null;
+        $decryptedWebhookSecret = null;
+        if (($m['payment_service_provider'] ?? '') === 'MONERIS') {
+            $decryptedApiToken = isset($details['checkoutApiToken']) ? $decryptFn($details['checkoutApiToken']) : null;
+            $checkoutProfiles = $details['checkoutProfiles'] ?? null;
+        } elseif (($m['payment_service_provider'] ?? '') === 'LITTLEPAY') {
+            $encSec = $details['webhooks']['charge.authorisation.succeeded']['secretKey'] ?? null;
+            if (!$encSec && !empty($details['subscriptions']) && is_array($details['subscriptions'])) {
+                foreach ($details['subscriptions'] as $sub) {
+                    if (($sub['eventType'] ?? '') === 'charge.authorisation.succeeded' && !empty($sub['secretKey'])) {
+                        $encSec = $sub['secretKey'];
+                        break;
+                    }
+                }
+            }
+            $decryptedWebhookSecret = $encSec ? $decryptFn($encSec) : null;
+        }
+        $merchants[] = [
+            'id' => (int) $m['id'],
+            'customUuid' => $encodeUuid($m['id']),
+            'name' => $m['name'],
+            'psp' => $m['payment_service_provider'],
+            'paymentProviderId' => $m['payment_provider_id'],
+            'decryptedApiToken' => $decryptedApiToken,
+            'checkoutProfiles' => $checkoutProfiles,
+            'decryptedWebhookSecret' => $decryptedWebhookSecret,
+        ];
+    }
+
+    $cRows = $pdo->query('SELECT id, status, merchant_id, passenger_account_id, created, modified FROM shopping_carts ORDER BY id DESC LIMIT 20')->fetchAll();
+    foreach ($cRows as $c) {
+        $shoppingCarts[] = [
+            'id' => (int) $c['id'],
+            'customUuid' => $encodeUuid($c['id']),
+            'status' => $c['status'],
+            'merchantId' => (int) $c['merchant_id'],
+            'merchantCustomUuid' => $encodeUuid($c['merchant_id']),
+            'passengerAccountId' => (int) $c['passenger_account_id'],
+            'passengerCustomUuid' => $encodeUuid($c['passenger_account_id']),
+            'updatedAt' => $c['modified'],
+        ];
+    }
+
+    $tRows = $pdo->query('SELECT id, passenger_account_id, payment_provider_id, raw_token, label, payment_provider_name, payment_token_type, status, expired, created FROM fare_payment_tokens ORDER BY id DESC LIMIT 10')->fetchAll();
+    foreach ($tRows as $t) {
+        $recentTokens[] = [
+            'id' => (int) $t['id'],
+            'customUuid' => $encodeUuid($t['id']),
+            'passengerAccountId' => (int) $t['passenger_account_id'],
+            'passengerCustomUuid' => $encodeUuid($t['passenger_account_id']),
+            'paymentProviderId' => $t['payment_provider_id'],
+            'token' => (json_decode($t['raw_token'] ?? '', true)['identifier'] ?? $t['raw_token']),
+            'rawToken' => $t['raw_token'],
+            'label' => $t['label'],
+            'paymentProviderName' => $t['payment_provider_name'],
+            'paymentMethod' => $t['payment_token_type'],
+            'status' => $t['status'],
+            'expirationDate' => $t['expired'],
+            'createdAt' => $t['created'],
+        ];
+    }
+
+    $sRows = $pdo->query('SELECT s.id, s.reference, s.status, s.passenger_account_id, s.created, t.ext_ref AS transaction_id, t.amount, t.currency_type FROM fare_sales s LEFT JOIN fare_transactions t ON t.fare_sale_id = s.id ORDER BY s.id DESC LIMIT 10')->fetchAll();
+    foreach ($sRows as $s) {
+        $recentSales[] = [
+            'id' => (int) $s['id'],
+            'reference' => $s['reference'],
+            'transactionId' => $s['transaction_id'] ?? $s['reference'],
+            'status' => $s['status'],
+            'passengerAccountId' => (int) $s['passenger_account_id'],
+            'amount' => $s['amount'],
+            'currency' => $s['currency_type'],
+            'createdAt' => $s['created'],
+        ];
+    }
+}
+
+$samplePassengers = [
+    ['id' => 2858, 'customUuid' => $encodeUuid(2858), 'label' => 'Passenger #2858 (Default QA)'],
+    ['id' => 1, 'customUuid' => $encodeUuid(1), 'label' => 'Passenger #1'],
+    ['id' => 2891, 'customUuid' => $encodeUuid(2891), 'label' => 'Passenger #2891'],
+];
+
+$inspectUuids = [];
+foreach (['merchantId', 'reference', 'customerRef'] as $field) {
+    $val = trim((string) ($input[$field] ?? ''));
+    $inspectUuids[$field] = [
+        'value' => $val,
+        'isValidUuidV5' => $isValidUuidV5($val),
+        'decodedId' => $decodeUuid($val),
+    ];
+}
+
+echo json_encode([
+    'ok' => true,
+    'customerShortname' => $customer,
+    'authenticators' => $authenticators,
+    'dbConnected' => $pdo !== null,
+    'dbError' => $dbError,
+    'merchants' => $merchants,
+    'shoppingCarts' => $shoppingCarts,
+    'samplePassengers' => $samplePassengers,
+    'recentTokens' => $recentTokens,
+    'recentSales' => $recentSales,
+    'inspectUuids' => $inspectUuids,
+]);
+`;
+
+    const b64Input = Buffer.from(JSON.stringify(payloadObj || {}), 'utf8').toString('base64');
+    const res = await execCommandPromise('docker', ['exec', containerName, 'php', '-r', phpScript, b64Input], 10000);
+    if (!res.ok) {
+        return {
+            ok: false,
+            error: res.stderr || `Failed to execute PHP bridge in container ${containerName}`
+        };
+    }
+
+    try {
+        return JSON.parse(res.stdout);
+    } catch (e) {
+        return {
+            ok: false,
+            error: `Failed to parse PHP bridge output: ${res.stdout || res.stderr}`
+        };
+    }
+}
+
+/**
+ * Fetches an OAuth2 Client Credentials JWT token from local Keycloak (keycloak.wandev)
+ */
+async function fetchLocalKeycloakToken(customerShortname = 'DEV-LOCAL') {
+    const tokenUrl = `http://127.0.0.1:80/auth/realms/${encodeURIComponent(customerShortname)}/protocol/openid-connect/token`;
+    const formBody = 'grant_type=client_credentials&client_id=back_2cloud&client_secret=7d5155cd-3774-4bce-8a81-7d7ac1367f7e&scope=customer';
+    try {
+        const res = await makeHttpRequest(
+            tokenUrl,
+            'POST',
+            {
+                'Host': 'keycloak.wandev',
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Accept': 'application/json'
+            },
+            formBody,
+            6000
+        );
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+            const parsed = JSON.parse(res.body);
+            if (parsed && parsed.access_token) {
+                return {
+                    ok: true,
+                    accessToken: parsed.access_token,
+                    expiresIn: parsed.expires_in
+                };
+            }
+        }
+        return {
+            ok: false,
+            statusCode: res.statusCode,
+            error: `Keycloak returned HTTP ${res.statusCode}: ${res.body}`
+        };
+    } catch (err) {
+        return {
+            ok: false,
+            error: `Keycloak connection error: ${err.message}`
+        };
+    }
+}
+
+/**
+ * Handles POST /api/local-callback/preflight
+ * Actions:
+ * - 'discover': Returns local DB merchants, carts, passengers, and container status
+ * - 'encode_uuid': Encodes a legacy integer ID into a Custom UUID
+ * - 'fix_cart_status': Resets a shopping_cart row status to WAITING_PAYMENT
+ * - 'check' (default): Executes the 6 Pre-Flight Checks for local callback readiness
+ */
+async function handleLocalCallbackPreflight(payload = {}) {
+    const action = payload.action || 'check';
+    const psp = (payload.psp || 'littlepay').toLowerCase();
+    const customerShortname = (payload.customerShortname || 'DEV-LOCAL').trim();
+    const targetServerPref = payload.targetServer || 'auto';
+
+    const dockerInfo = await inspectLocalDockerContainers();
+    const target = resolveTargetContainerAndUrl(dockerInfo, targetServerPref, psp);
+
+    if (action === 'encode_uuid') {
+        const bridgeRes = await runLocalPhpBridge(target.containerName, {
+            action: 'encode_uuid',
+            customerShortname,
+            rawId: payload.rawId
+        });
+        return bridgeRes;
+    }
+
+    if (action === 'fix_cart_status') {
+        const bridgeRes = await runLocalPhpBridge(target.containerName, {
+            action: 'fix_cart_status',
+            customerShortname,
+            cartIdOrUuid: payload.cartIdOrUuid,
+            status: payload.status || 'WAITING_PAYMENT'
+        });
+        return bridgeRes;
+    }
+
+    const bridgeData = dockerInfo.dockerRunning
+        ? await runLocalPhpBridge(target.containerName, {
+            action: 'discover',
+            customerShortname,
+            merchantId: payload.merchantId,
+            reference: payload.reference,
+            customerRef: payload.customerRef
+        })
+        : { ok: false, error: dockerInfo.error };
+
+    if (action === 'discover') {
+        return {
+            ok: Boolean(bridgeData && bridgeData.ok),
+            dockerInfo,
+            resolvedTarget: target,
+            envConfig: {
+                monerisStoreId: (process.env.MONERIS_STORE_ID || '').trim(),
+                monerisCheckoutId: resolveMonerisCheckoutId(payload.paymentContext || 'save_card', true, false),
+                monerisHasApiToken: Boolean(process.env.MONERIS_API_TOKEN && process.env.MONERIS_API_TOKEN !== 'FILLME'),
+                littlepayHasApiKey: Boolean(process.env.LITTLEPAY_API_KEY)
+            },
+            ...(bridgeData || {})
+        };
+    }
+
+    // -------------------------------------------------------------------------
+    // ACTION: 'check' — Run the 6 Pre-Flight Diagnostic Checks
+    // -------------------------------------------------------------------------
+    const checks = [];
+    const paymentContext = (payload.paymentContext || 'save_card').trim();
+    const merchantId = (payload.merchantId || '').trim();
+    const reference = (payload.reference || '').trim();
+    const customerRef = (payload.customerRef || '').trim();
+    const webhookSecret = (payload.webhookSecret || '').trim();
+
+    // Check 1: Docker & wfwp-platform Container + Authenticator Registration
+    const containerRunning = Boolean(dockerInfo.containers && dockerInfo.containers[target.containerName]);
+    const auths = (bridgeData && bridgeData.authenticators) || {};
+    const hasRequiredAuthenticator = psp === 'moneris' ? Boolean(auths.moneris) : Boolean(auths.littlepay);
+
+    if (!dockerInfo.dockerRunning || !containerRunning) {
+        checks.push({
+            id: 'server_route',
+            step: 1,
+            title: 'Local Server & Container (`wfwp-platform`)',
+            status: 'error',
+            summary: `Container '${target.containerName}' is not running.`,
+            details: dockerInfo.error || `Start wfwp-platform container before forwarding callbacks.`
+        });
+    } else if (!hasRequiredAuthenticator) {
+        const altNote = psp === 'moneris' && dockerInfo.containers['wfwp-moneris-sandbox']
+            ? `Switch Target Server to 'http://127.0.0.1:8099 (wfwp-moneris-sandbox)' which has MonerisCallbackAuthenticator enabled.`
+            : `Ensure ${psp === 'moneris' ? 'MonerisCallbackAuthenticator' : 'LittlepayCallbackAuthenticator'} is registered in security.yaml.`;
+        checks.push({
+            id: 'server_route',
+            step: 1,
+            title: 'Local Server & Authenticator (`wfwp-platform`)',
+            status: 'error',
+            summary: `${psp.toUpperCase()} callback authenticator is missing on container '${target.containerName}'.`,
+            details: altNote,
+            fixAction: (psp === 'moneris' && dockerInfo.containers['wfwp-moneris-sandbox'])
+                ? { type: 'switch_target_server', value: 'http://127.0.0.1:8099', label: '⚡ Switch to Port 8099 (wfwp-moneris-sandbox)' }
+                : null
+        });
+    } else {
+        checks.push({
+            id: 'server_route',
+            step: 1,
+            title: 'Local Server & Authenticator (`wfwp-platform`)',
+            status: 'ok',
+            summary: `Target '${target.baseUrl}/billing/payment/callback/${customerShortname}' (${target.containerName}) is online with ${psp === 'moneris' ? 'MonerisCallbackAuthenticator' : 'LittlepayCallbackAuthenticator'}.`,
+            details: `Container status: ${dockerInfo.containers[target.containerName].status}`
+        });
+    }
+
+    // Check 2: Custom UUID Format (UuidV5) & Tenant Decoding
+    const uuids = (bridgeData && bridgeData.inspectUuids) || {};
+    const mUuid = uuids.merchantId || {};
+    const rUuid = uuids.reference || {};
+    const cUuid = uuids.customerRef || {};
+
+    const uuidErrors = [];
+    if (!mUuid.isValidUuidV5 || !mUuid.decodedId) {
+        uuidErrors.push(`merchant_id '${merchantId || '(empty)'}' is not a valid ${customerShortname} Custom UUID`);
+    }
+    if (!rUuid.isValidUuidV5 || !rUuid.decodedId) {
+        uuidErrors.push(`reference '${reference || '(empty)'}' is not a valid ${customerShortname} Custom UUID`);
+    }
+    if (!cUuid.isValidUuidV5 || !cUuid.decodedId) {
+        uuidErrors.push(`customer_ref '${customerRef || '(empty)'}' is not a valid ${customerShortname} Custom UUID`);
+    }
+
+    if (uuidErrors.length > 0) {
+        checks.push({
+            id: 'custom_uuids',
+            step: 2,
+            title: `Custom UUIDv5 Format & Decoding (${customerShortname})`,
+            status: 'error',
+            summary: uuidErrors.join(' • '),
+            details: `wfwp-platform requires valid UuidV5 strings encoded for '${customerShortname}'. Click 'Auto-Fill from Local DB' to populate valid Custom UUIDs.`,
+            fixAction: { type: 'auto_fill', label: '⚡ Auto-Fill Valid UUIDs from Local DB' }
+        });
+    } else {
+        checks.push({
+            id: 'custom_uuids',
+            step: 2,
+            title: `Custom UUIDv5 Format & Decoding (${customerShortname})`,
+            status: 'ok',
+            summary: `Decoded IDs → Merchant #${mUuid.decodedId}, Reference #${rUuid.decodedId}, Customer #${cUuid.decodedId}`,
+            details: `All 3 UUIDs are valid UuidV5 strings for tenant '${customerShortname}'.`
+        });
+    }
+
+    // Check 3: Merchant Record in fare_merchants
+    const merchants = (bridgeData && bridgeData.merchants) || [];
+    const matchedMerchant = merchants.find(m => String(m.id) === String(mUuid.decodedId));
+    const expectedPspEnum = psp === 'moneris' ? 'MONERIS' : 'LITTLEPAY';
+
+    const findPreferredCandidateMerchant = (pspEnum) => {
+        if (pspEnum === 'LITTLEPAY') {
+            return merchants.find(m => m.psp === 'LITTLEPAY' && m.decryptedWebhookSecret)
+                || merchants.find(m => m.psp === 'LITTLEPAY');
+        }
+        return merchants.find(m => m.psp === 'MONERIS' && m.decryptedApiToken)
+            || merchants.find(m => m.psp === pspEnum);
+    };
+
+    if (!matchedMerchant) {
+        const candidateMerchant = findPreferredCandidateMerchant(expectedPspEnum);
+        checks.push({
+            id: 'merchant_db',
+            step: 3,
+            title: 'Merchant Record in Local DB (`fare_merchants`)',
+            status: 'error',
+            summary: `Merchant ID #${mUuid.decodedId || '?'} was not found in 'fare_merchants'.`,
+            details: candidateMerchant
+                ? `Available ${expectedPspEnum} merchant in DB: #${candidateMerchant.id} (${candidateMerchant.name} — ${candidateMerchant.customUuid}).`
+                : `No ${expectedPspEnum} merchant found in fare_merchants.`,
+            fixAction: candidateMerchant
+                ? { type: 'select_merchant', merchant: candidateMerchant, label: `⚡ Use Merchant #${candidateMerchant.id} (${candidateMerchant.name})` }
+                : null
+        });
+    } else if (matchedMerchant.psp !== expectedPspEnum) {
+        const candidateMerchant = findPreferredCandidateMerchant(expectedPspEnum);
+        checks.push({
+            id: 'merchant_db',
+            step: 3,
+            title: 'Merchant Record in Local DB (`fare_merchants`)',
+            status: 'error',
+            summary: `Merchant #${matchedMerchant.id} (${matchedMerchant.name}) has PSP '${matchedMerchant.psp}', expected '${expectedPspEnum}'.`,
+            details: `Select a ${expectedPspEnum} merchant so PaymentCallbackController routes to the right PaymentGateway.`,
+            fixAction: candidateMerchant
+                ? { type: 'select_merchant', merchant: candidateMerchant, label: `⚡ Switch to Merchant #${candidateMerchant.id} (${candidateMerchant.name})` }
+                : null
+        });
+    } else {
+        checks.push({
+            id: 'merchant_db',
+            step: 3,
+            title: 'Merchant Record in Local DB (`fare_merchants`)',
+            status: 'ok',
+            summary: `Merchant #${matchedMerchant.id} '${matchedMerchant.name}' (${matchedMerchant.psp} / ${matchedMerchant.paymentProviderId}) found.`,
+            details: `Custom UUID: ${matchedMerchant.customUuid}`
+        });
+    }
+
+    // Check 4: Callback Authentication & Gateway Credentials
+    if (psp === 'moneris') {
+        const kcRes = await fetchLocalKeycloakToken(customerShortname);
+        const envStoreId = (process.env.MONERIS_STORE_ID || '').trim();
+        const envApiToken = (process.env.MONERIS_API_TOKEN || '').trim();
+        const dbStoreId = matchedMerchant ? matchedMerchant.paymentProviderId : null;
+        const dbApiToken = matchedMerchant ? matchedMerchant.decryptedApiToken : null;
+
+        const credsMatch = matchedMerchant && dbStoreId === envStoreId && dbApiToken === envApiToken;
+        if (!kcRes.ok) {
+            checks.push({
+                id: 'auth_credentials',
+                step: 4,
+                title: 'Moneris Callback Auth (Keycloak JWT & MCO Credentials)',
+                status: 'error',
+                summary: `Keycloak token request failed: ${kcRes.error}`,
+                details: `MonerisCallbackAuthenticator requires a valid Bearer JWT from keycloak.wandev.`
+            });
+        } else if (matchedMerchant && !credsMatch) {
+            checks.push({
+                id: 'auth_credentials',
+                step: 4,
+                title: 'Moneris Callback Auth (Keycloak JWT & MCO Credentials)',
+                status: 'warn',
+                summary: `Keycloak JWT OK, but Merchant #${matchedMerchant.id} DB credentials (${dbStoreId}) differ from env.local.json (${envStoreId}).`,
+                details: `MonerisPaymentGateway::getPaymentDetails() uses fare_merchants credentials to verify the MCO ticket.`
+            });
+        } else {
+            checks.push({
+                id: 'auth_credentials',
+                step: 4,
+                title: 'Moneris Callback Auth (Keycloak JWT & MCO Credentials)',
+                status: 'ok',
+                summary: `Keycloak Bearer JWT acquired & Merchant #${matchedMerchant ? matchedMerchant.id : '?'} MCO credentials match env.local.json (${envStoreId}).`,
+                details: `Header 'X-Payment-Provider: moneris' + 'Authorization: Bearer <jwt>' ready.`
+            });
+        }
+    } else {
+        const dbSecret = matchedMerchant ? matchedMerchant.decryptedWebhookSecret : null;
+        const effectiveSecret = webhookSecret || dbSecret || '';
+        const candidateWithSecret = merchants.find(m => m.psp === 'LITTLEPAY' && m.decryptedWebhookSecret);
+        if (matchedMerchant && !dbSecret) {
+            checks.push({
+                id: 'auth_credentials',
+                step: 4,
+                title: 'LittlePay Webhook Signature (`Event-Signature` HMAC-SHA256)',
+                status: 'error',
+                summary: `Merchant #${matchedMerchant.id} (${matchedMerchant.name}) has no 'charge.authorisation.succeeded' webhook subscription in fare_merchants.`,
+                details: `LittlepayCallbackAuthenticator will fail with 401 ('Subscription of type charge.authorisation.succeeded is not found.').`,
+                fixAction: candidateWithSecret
+                    ? { type: 'select_merchant', merchant: candidateWithSecret, label: `⚡ Switch to Merchant #${candidateWithSecret.id} (${candidateWithSecret.name})` }
+                    : null
+            });
+        } else if (!effectiveSecret) {
+            checks.push({
+                id: 'auth_credentials',
+                step: 4,
+                title: 'LittlePay Webhook Signature (`Event-Signature` HMAC-SHA256)',
+                status: 'error',
+                summary: `No webhook secret key configured or found in fare_merchants.`,
+                details: `LittlepayCallbackAuthenticator verifies 'Event-Signature' using HMAC-SHA256.`
+            });
+        } else if (dbSecret && webhookSecret && dbSecret !== webhookSecret) {
+            checks.push({
+                id: 'auth_credentials',
+                step: 4,
+                title: 'LittlePay Webhook Signature (`Event-Signature` HMAC-SHA256)',
+                status: 'error',
+                summary: `Configured webhook secret does not match Merchant #${matchedMerchant.id} decrypted secret in DB ('${dbSecret}').`,
+                details: `Signature verification in LittlepayCallbackAuthenticator will fail with 401 Unauthorized.`,
+                fixAction: { type: 'set_webhook_secret', value: dbSecret, label: `⚡ Use DB Secret (${dbSecret})` }
+            });
+        } else {
+            checks.push({
+                id: 'auth_credentials',
+                step: 4,
+                title: 'LittlePay Webhook Signature (`Event-Signature` HMAC-SHA256)',
+                status: 'ok',
+                summary: `HMAC-SHA256 secretKey verified ('${effectiveSecret}') — matches Merchant #${matchedMerchant ? matchedMerchant.id : '?'} in DB.`,
+                details: `Header 'Event-Signature' will be automatically signed over the JSON payload.`
+            });
+        }
+    }
+
+    // Check 5: Payment Context Target Entity (save_card / cart / ewallet_reload)
+    const carts = (bridgeData && bridgeData.shoppingCarts) || [];
+    if (paymentContext === 'save_card') {
+        if (reference && customerRef && reference !== customerRef) {
+            checks.push({
+                id: 'context_entity',
+                step: 5,
+                title: 'Payment Context Entity (`save_card` → Passenger Account)',
+                status: 'warn',
+                summary: `For 'save_card', reference (${reference.slice(0, 8)}…) usually equals customer_ref (${customerRef.slice(0, 8)}…).`,
+                details: `SaveCardSaleConfirmedProcessor saves the PaymentToken under passengerAccountId = decoded(reference) (#${rUuid.decodedId}).`,
+                fixAction: customerRef
+                    ? { type: 'sync_reference_to_customer', value: customerRef, label: '⚡ Set Reference = Customer UUID' }
+                    : null
+            });
+        } else {
+            checks.push({
+                id: 'context_entity',
+                step: 5,
+                title: 'Payment Context Entity (`save_card` → Passenger Account)',
+                status: 'ok',
+                summary: `Card token will be saved in 'fare_payment_tokens' for Passenger Account #${rUuid.decodedId || '?'}.`,
+                details: `Passenger Custom UUID: ${reference}`
+            });
+        }
+    } else if (paymentContext === 'cart') {
+        const matchedCart = carts.find(c => String(c.id) === String(rUuid.decodedId));
+        if (!matchedCart) {
+            const fallbackCart = carts[0] || null;
+            checks.push({
+                id: 'context_entity',
+                step: 5,
+                title: 'Payment Context Entity (`cart` → `shopping_carts`)',
+                status: 'error',
+                summary: `ShoppingCart #${rUuid.decodedId || '?'} does not exist in 'shopping_carts'.`,
+                details: fallbackCart
+                    ? `CartSaleConfirmedProcessor requires an existing row in shopping_carts (e.g. Cart #${fallbackCart.id} → ${fallbackCart.customUuid}).`
+                    : `No rows found in shopping_carts.`,
+                fixAction: fallbackCart
+                    ? { type: 'select_cart', cart: fallbackCart, label: `⚡ Use ShoppingCart #${fallbackCart.id}` }
+                    : null
+            });
+        } else if (matchedCart.status !== 'WAITING_PAYMENT') {
+            checks.push({
+                id: 'context_entity',
+                step: 5,
+                title: 'Payment Context Entity (`cart` → `shopping_carts`)',
+                status: 'warn',
+                summary: `ShoppingCart #${matchedCart.id} has status '${matchedCart.status}' (must be 'WAITING_PAYMENT' to process).`,
+                details: `CartSaleConfirmedProcessor ignores carts that are not in WAITING_PAYMENT status.`,
+                fixAction: {
+                    type: 'fix_cart_status',
+                    cartId: matchedCart.id,
+                    customUuid: matchedCart.customUuid,
+                    label: `⚡ Reset Cart #${matchedCart.id} to WAITING_PAYMENT`
+                }
+            });
+        } else {
+            checks.push({
+                id: 'context_entity',
+                step: 5,
+                title: 'Payment Context Entity (`cart` → `shopping_carts`)',
+                status: 'ok',
+                summary: `ShoppingCart #${matchedCart.id} is in 'WAITING_PAYMENT' status (Passenger #${matchedCart.passengerAccountId}).`,
+                details: `Cart Custom UUID: ${matchedCart.customUuid}`
+            });
+        }
+    } else {
+        checks.push({
+            id: 'context_entity',
+            step: 5,
+            title: 'Payment Context Entity (`ewallet_reload`)',
+            status: rUuid.decodedId ? 'ok' : 'error',
+            summary: rUuid.decodedId
+                ? `eWallet Reload Reference decoded to ID #${rUuid.decodedId} (Customer #${cUuid.decodedId}).`
+                : `Invalid reference UUID for ewallet_reload.`,
+            details: `EwalletReloadSaleConfirmedProcessor will process reload reference #${rUuid.decodedId || '?'}.`
+        });
+    }
+
+    // Check 6: Database & Async Messenger Transport (`billing_sale_transport`)
+    const hasPostgres = Boolean(dockerInfo.containers && dockerInfo.containers['2cloud-postgres_main-1']) && Boolean(bridgeData && bridgeData.dbConnected);
+    const hasPubsub = Boolean(dockerInfo.containers && dockerInfo.containers['2cloud-pubsub-1']);
+
+    if (!hasPostgres) {
+        checks.push({
+            id: 'db_and_queue',
+            step: 6,
+            title: 'PostgreSQL DB & Messenger Queue (`billing_sale_transport`)',
+            status: 'error',
+            summary: `PostgreSQL container '2cloud-postgres_main-1' is not reachable.`,
+            details: (bridgeData && bridgeData.dbError) || 'Check docker ps for 2cloud-postgres_main-1.'
+        });
+    } else if (!hasPubsub) {
+        checks.push({
+            id: 'db_and_queue',
+            step: 6,
+            title: 'PostgreSQL DB & Messenger Queue (`billing_sale_transport`)',
+            status: 'warn',
+            summary: `PostgreSQL is connected, but '2cloud-pubsub-1' container was not detected.`,
+            details: `PaymentCallbackController dispatches SaleConfirmedMessage to PubSub emulator.`
+        });
+    } else {
+        checks.push({
+            id: 'db_and_queue',
+            step: 6,
+            title: 'PostgreSQL DB & Messenger Queue (`billing_sale_transport`)',
+            status: 'ok',
+            summary: `PostgreSQL ('2cloud-postgres_main-1') & PubSub ('2cloud-pubsub-1') online. Auto-consume enabled.`,
+            details: `After HTTP 200 callback, 'messenger:consume billing_sale_transport --limit=1' will persist records into fare_payment_tokens / fare_sales.`
+        });
+    }
+
+    const hasError = checks.some(c => c.status === 'error');
+    const hasWarn = checks.some(c => c.status === 'warn');
+
+    return {
+        ok: true,
+        allPassed: !hasError,
+        overallStatus: hasError ? 'error' : (hasWarn ? 'warn' : 'ok'),
+        psp,
+        customerShortname,
+        paymentContext,
+        resolvedTarget: target,
+        checks,
+        merchants: (bridgeData && bridgeData.merchants) || [],
+        shoppingCarts: (bridgeData && bridgeData.shoppingCarts) || [],
+        samplePassengers: (bridgeData && bridgeData.samplePassengers) || [],
+        recentTokens: (bridgeData && bridgeData.recentTokens) || [],
+        recentSales: (bridgeData && bridgeData.recentSales) || [],
+        inspectUuids: uuids
+    };
+}
+
+/**
+ * Handles POST /api/local-callback/forward
+ * Builds/synthesizes the exact PSP callback (Moneris or LittlePay), sends it to
+ * POST /billing/payment/callback/{customerShortname}, optionally consumes 1 message
+ * from billing_sale_transport, and queries PostgreSQL to verify persisted records.
+ */
+async function handleLocalCallbackForward(payload = {}) {
+    const psp = (payload.psp || 'littlepay').toLowerCase();
+    const customerShortname = (payload.customerShortname || 'DEV-LOCAL').trim();
+    const targetServerPref = payload.targetServer || 'auto';
+    const paymentContext = (payload.paymentContext || 'save_card').trim();
+    const merchantId = (payload.merchantId || '').trim();
+    const reference = (payload.reference || '').trim();
+    const customerRef = (payload.customerRef || reference).trim();
+    const autoConsumeQueue = payload.autoConsumeQueue !== false;
+
+    const dockerInfo = await inspectLocalDockerContainers();
+    const target = resolveTargetContainerAndUrl(dockerInfo, targetServerPref, psp);
+    const callbackUrl = `${target.baseUrl}/billing/payment/callback/${encodeURIComponent(customerShortname)}`;
+
+    // Inspect before state in DB so we can highlight newly persisted tokens/sales
+    const beforeBridge = dockerInfo.dockerRunning
+        ? await runLocalPhpBridge(target.containerName, {
+            action: 'discover',
+            customerShortname,
+            merchantId,
+            reference,
+            customerRef
+        })
+        : null;
+
+    let requestHeaders = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Host': target.hostHeader
+    };
+    let callbackBodyObj = null;
+
+    if (psp === 'moneris') {
+        const ticket = (payload.ticket || '').trim();
+        if (!ticket) {
+            return {
+                ok: false,
+                error: 'A Moneris Checkout ticket is required to forward a Moneris callback.'
+            };
+        }
+
+        let bearerToken = (payload.bearerToken || '').trim();
+        if (!bearerToken) {
+            const kcRes = await fetchLocalKeycloakToken(customerShortname);
+            if (!kcRes.ok) {
+                return {
+                    ok: false,
+                    error: `Failed to obtain Keycloak Bearer token for Moneris callback: ${kcRes.error}`
+                };
+            }
+            bearerToken = kcRes.accessToken;
+        }
+
+        requestHeaders['X-Payment-Provider'] = 'moneris';
+        requestHeaders['Authorization'] = `Bearer ${bearerToken}`;
+
+        const effectiveMerchantId = isUuidLike(merchantId)
+            ? merchantId
+            : '0cd00307-cae0-5003-a0e0-0c0002150000';
+
+        const explicitAlias = (payload.checkoutProfile || payload.checkoutProfileAlias || '').trim();
+        const checkoutProfileAlias = (explicitAlias && explicitAlias !== 'auto')
+            ? explicitAlias
+            : resolveMonerisAliasForContext(
+                paymentContext || 'save_card',
+                payload.shouldSaveCard !== false,
+                Boolean(payload.darkMode)
+            );
+
+        callbackBodyObj = payload.customPayloadOverride || {
+            ticket: ticket,
+            merchant_id: effectiveMerchantId,
+            checkout_profile: checkoutProfileAlias
+        };
+    } else {
+        // LittlePay Webhook Synthesis (charge.authorisation.succeeded)
+        const matchedMerchant = ((beforeBridge && beforeBridge.merchants) || []).find(
+            m => m.customUuid === merchantId || ( m.psp === 'LITTLEPAY' && !merchantId )
+        );
+        const webhookSecret = (payload.webhookSecret || (matchedMerchant && matchedMerchant.decryptedWebhookSecret) || 'test_secret_12345').trim();
+        const paymentProviderId = (payload.paymentProviderId || (matchedMerchant && matchedMerchant.paymentProviderId) || 'matawan-testportal').trim();
+
+        const rawMask = String(payload.cardMask || '************4242').trim();
+        const normalizedMask = rawMask.length >= 4
+            ? '*'.repeat(12) + rawMask.slice(-4)
+            : '************4242';
+
+        callbackBodyObj = payload.customPayloadOverride || {
+            event_id: payload.eventId || `ev_sandbox_${Date.now()}`,
+            type: 'charge.authorisation.succeeded',
+            created_date_time: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+            data_object: {
+                transaction_id: payload.transactionId || `pi_sandbox_${Date.now()}`,
+                charge: {
+                    order_id: payload.orderId || `ord_sandbox_${Date.now()}`,
+                    amount: Number.isFinite(Number(payload.amount)) ? Number(payload.amount) : 0,
+                    currency: (payload.currency || 'EUR').trim(),
+                    payment_method: 'CARD',
+                    saved_by_customer: payload.savedByCustomer !== false,
+                    funding_source_id: payload.fundingSourceId || `fs_sandbox_${Date.now()}`,
+                    acquirer_transaction_reference: Math.floor(100000 + Math.random() * 900000),
+                    card_mask: normalizedMask,
+                    card_expiry: (payload.cardExpiry || '12/28').trim(),
+                    card_type: (payload.cardType || 'VISA').trim().toUpperCase(),
+                    customer_ref: customerRef,
+                    order_metadata: {
+                        reference: reference,
+                        merchant_id: merchantId,
+                        payment_provider_id: paymentProviderId,
+                        payment_context: paymentContext
+                    }
+                }
+            }
+        };
+
+        const rawBodyForSig = JSON.stringify(callbackBodyObj);
+        const hmacSignature = crypto
+            .createHmac('sha256', webhookSecret)
+            .update(rawBodyForSig, 'utf8')
+            .digest('hex');
+
+        requestHeaders['Event-Signature'] = hmacSignature;
+    }
+
+    const rawBodyString = JSON.stringify(callbackBodyObj);
+
+    console.log(`\n------------------------------------------------------------`);
+    console.log(`[Local Callback Forward] POST ${callbackUrl} (${psp.toUpperCase()})`);
+    console.log(`[Local Callback Headers]:`, JSON.stringify(requestHeaders, null, 2));
+    console.log(`[Local Callback Payload]:\n${JSON.stringify(callbackBodyObj, null, 2)}`);
+    console.log(`------------------------------------------------------------\n`);
+
+    let callbackHttpRes = await makeHttpRequest(callbackUrl, 'POST', requestHeaders, rawBodyString, 15000);
+    if (
+        callbackHttpRes.statusCode === 500 &&
+        dockerInfo.dockerRunning &&
+        typeof callbackHttpRes.body === 'string' &&
+        callbackHttpRes.body.includes('Topic not found')
+    ) {
+        console.log(`[Local Callback Forward] Pub/Sub topic not found — creating topics & running 'enqueue:setup-broker' on ${target.containerName} and retrying...`);
+        await execCommandPromise(
+            'docker',
+            [
+                'exec',
+                target.containerName,
+                'php',
+                '-r',
+                'require "/projects/services/app/vendor/autoload.php"; (new \\Symfony\\Component\\Dotenv\\Dotenv())->usePutenv()->bootEnv("/projects/services/app/.env"); $c = new \\Google\\Cloud\\PubSub\\PubSubClient(["projectId" => getenv("PUBSUB_PROJECT_ID") ?: "local"]); foreach (["event-sale", "event-sale-deadletter", "event-sale-item", "event-sale-item-deadletter", "event-ewallet", "event-ewallet-deadletter", "event-process-operation", "event-process-operation-deadletter"] as $t) { $tp = $c->topic($t); if (!$tp->exists()) { $tp->create(); } }'
+            ],
+            8000
+        );
+        await execCommandPromise(
+            'docker',
+            ['exec', target.containerName, 'php', 'bin/console', 'enqueue:setup-broker'],
+            8000
+        );
+        callbackHttpRes = await makeHttpRequest(callbackUrl, 'POST', requestHeaders, rawBodyString, 15000);
+    }
+
+    let parsedCallbackResBody = callbackHttpRes.body;
+    try {
+        parsedCallbackResBody = callbackHttpRes.body ? JSON.parse(callbackHttpRes.body) : { status: `${callbackHttpRes.statusCode} ${callbackHttpRes.statusMessage || 'OK'}` };
+    } catch (e) {
+        parsedCallbackResBody = callbackHttpRes.body || `${callbackHttpRes.statusCode} ${callbackHttpRes.statusMessage}`;
+    }
+
+    const callbackSucceeded = callbackHttpRes.statusCode >= 200 && callbackHttpRes.statusCode < 300;
+
+    // Step 3b: Consume 1 message from billing_sale_transport so SaleConfirmedHandler persists to DB immediately
+    let consumerResult = null;
+    if (callbackSucceeded && autoConsumeQueue && dockerInfo.dockerRunning) {
+        const consumeCmd = await execCommandPromise(
+            'docker',
+            [
+                'exec',
+                target.containerName,
+                'php',
+                'bin/console',
+                'messenger:consume',
+                'billing_sale_transport',
+                '--limit=1',
+                '--time-limit=4',
+                '--no-interaction',
+                '-v'
+            ],
+            8000
+        );
+        consumerResult = {
+            ok: consumeCmd.ok,
+            output: consumeCmd.stdout || consumeCmd.stderr
+        };
+    }
+
+    // Step 4: Inspect DB state after callback & queue consumption
+    const afterBridge = dockerInfo.dockerRunning
+        ? await runLocalPhpBridge(target.containerName, {
+            action: 'discover',
+            customerShortname,
+            merchantId,
+            reference,
+            customerRef
+        })
+        : null;
+
+    const beforeTokenIds = new Set(((beforeBridge && beforeBridge.recentTokens) || []).map(t => t.id));
+    const afterTokens = (afterBridge && afterBridge.recentTokens) || [];
+    const newTokens = afterTokens.filter(t => !beforeTokenIds.has(t.id));
+
+    const beforeSaleIds = new Set(((beforeBridge && beforeBridge.recentSales) || []).map(s => s.id));
+    const afterSales = (afterBridge && afterBridge.recentSales) || [];
+    const newSales = afterSales.filter(s => !beforeSaleIds.has(s.id));
+
+    const decodedCustomerId = afterBridge?.inspectUuids?.customerRef?.decodedId
+        || afterBridge?.inspectUuids?.reference?.decodedId
+        || null;
+    const customerTokens = decodedCustomerId
+        ? afterTokens.filter(t => String(t.passengerAccountId) === String(decodedCustomerId))
+        : afterTokens.slice(0, 3);
+
+    const decodedRefId = afterBridge?.inspectUuids?.reference?.decodedId || null;
+    const updatedCart = (paymentContext === 'cart' && decodedRefId && afterBridge?.shoppingCarts)
+        ? afterBridge.shoppingCarts.find(c => String(c.id) === String(decodedRefId))
+        : null;
+
+    return {
+        ok: callbackSucceeded,
+        psp,
+        customerShortname,
+        paymentContext,
+        targetContainer: target.containerName,
+        callbackRequest: {
+            url: callbackUrl,
+            method: 'POST',
+            headers: {
+                ...requestHeaders,
+                ...(requestHeaders.Authorization ? { Authorization: `${requestHeaders.Authorization.slice(0, 32)}…[JWT]` } : {})
+            },
+            payload: callbackBodyObj
+        },
+        callbackResponse: {
+            statusCode: callbackHttpRes.statusCode,
+            statusMessage: callbackHttpRes.statusMessage,
+            body: parsedCallbackResBody
+        },
+        consumerResult,
+        persistence: {
+            newTokens,
+            customerTokens: customerTokens.slice(0, 5),
+            newSales,
+            recentSales: afterSales.slice(0, 5),
+            updatedCart
+        }
+    };
+}
+
 /**
  * Master Registry of Supported PSP Backend Handlers
  *
@@ -1242,6 +2404,56 @@ const server = http.createServer((req, res) => {
         }, 'POST /api/server/restart');
 
         scheduleSandboxServerRestart('Manual restart triggered from UI');
+        return;
+    }
+
+    // Route: Local Backend Callback Pre-Flight Checks, Discovery & Quick-Fix Actions
+    if (req.method === 'POST' && pathname === '/api/local-callback/preflight') {
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk;
+        });
+
+        req.on('end', async () => {
+            console.log(`\n============================================================`);
+            console.log(`[Incoming Request] POST /api/local-callback/preflight`);
+            console.log(`[Request Payload]:\n${body}`);
+            console.log(`============================================================\n`);
+
+            try {
+                const payload = body ? JSON.parse(body) : {};
+                const result = await handleLocalCallbackPreflight(payload);
+                sendJsonResponse(res, 200, result, 'POST /api/local-callback/preflight');
+            } catch (err) {
+                console.error('[Local Callback Preflight Error]:', err);
+                sendJsonResponse(res, 500, { error: err.message }, 'POST /api/local-callback/preflight Error');
+            }
+        });
+        return;
+    }
+
+    // Route: Local Backend Callback Synthesis & Direct Forwarding (Moneris & LittlePay)
+    if (req.method === 'POST' && pathname === '/api/local-callback/forward') {
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk;
+        });
+
+        req.on('end', async () => {
+            console.log(`\n============================================================`);
+            console.log(`[Incoming Request] POST /api/local-callback/forward`);
+            console.log(`[Request Payload]:\n${body}`);
+            console.log(`============================================================\n`);
+
+            try {
+                const payload = body ? JSON.parse(body) : {};
+                const result = await handleLocalCallbackForward(payload);
+                sendJsonResponse(res, 200, result, 'POST /api/local-callback/forward');
+            } catch (err) {
+                console.error('[Local Callback Forward Error]:', err);
+                sendJsonResponse(res, 500, { error: err.message }, 'POST /api/local-callback/forward Error');
+            }
+        });
         return;
     }
 
