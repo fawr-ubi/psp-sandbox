@@ -386,14 +386,57 @@ function createLogGroup({ isSystemGroup = false, pspId = 'system', pspName = 'Sy
     return groupObj;
 }
 
+const LOGS_BROADCAST_CHANNEL_NAME = 'psp_sandbox_live_logs_v1';
+const LOGS_SNAPSHOT_STORAGE_KEY = 'psp_sandbox_logs_snapshot_v1';
+let logsBroadcastChannel = null;
+try {
+    if (typeof BroadcastChannel !== 'undefined') {
+        logsBroadcastChannel = new BroadcastChannel(LOGS_BROADCAST_CHANNEL_NAME);
+    }
+} catch (e) {
+    logsBroadcastChannel = null;
+}
+
+function broadcastLogEvent(eventPayload) {
+    if (!logsBroadcastChannel) return;
+    try {
+        logsBroadcastChannel.postMessage(eventPayload);
+    } catch (e) {
+        // Ignore broadcast serialization errors
+    }
+}
+
+function saveLogsSnapshotForNewTab() {
+    try {
+        const serializableGroups = allLogGroups.map(g => ({
+            isSystemGroup: g.isSystemGroup,
+            pspId: g.pspId,
+            pspName: g.pspName,
+            title: g.title,
+            metaText: g.metaText,
+            status: g.status,
+            entries: g.entries.map(e => ({
+                timestamp: e.timestamp,
+                type: e.type,
+                category: e.category,
+                cleanText: e.cleanText,
+                payload: e.payload
+            }))
+        }));
+        localStorage.setItem(LOGS_SNAPSHOT_STORAGE_KEY, JSON.stringify(serializableGroups));
+    } catch (e) {
+        // Ignore quota errors
+    }
+}
+
 /**
  * Starts a new dedicated Payment Attempt section in the logs panel
  */
-function startPaymentAttemptLog({ pspId, pspName, method, amount, currency, customerRef }) {
+function startPaymentAttemptLog({ pspId, pspName, method, amount, currency, customerRef }, fromBroadcast = false) {
     const formattedAmount = amount !== undefined && amount !== null
         ? `${(Number(amount) / 100).toFixed(2)} ${currency || ''}`.trim()
         : '';
-    return createLogGroup({
+    const grp = createLogGroup({
         isSystemGroup: false,
         pspId: pspId || 'system',
         pspName: pspName || 'PSP',
@@ -401,12 +444,19 @@ function startPaymentAttemptLog({ pspId, pspName, method, amount, currency, cust
         amountDisplay: formattedAmount,
         customerRef: customerRef || '1'
     });
+    if (!fromBroadcast) {
+        broadcastLogEvent({
+            action: 'start_attempt',
+            data: { pspId, pspName, method, amount, currency, customerRef }
+        });
+    }
+    return grp;
 }
 
 /**
  * Updates the status pill and border color of the current payment attempt
  */
-function updateActiveAttemptStatus(newStatus, extraMeta = '') {
+function updateActiveAttemptStatus(newStatus, extraMeta = '', fromBroadcast = false) {
     if (!activeLogGroup || activeLogGroup.isSystemGroup) return;
     activeLogGroup.status = newStatus;
     activeLogGroup.element.classList.remove('status-pending', 'status-success', 'status-error');
@@ -424,12 +474,19 @@ function updateActiveAttemptStatus(newStatus, extraMeta = '') {
         activeLogGroup.metaText += ` • ${extraMeta}`;
         activeLogGroup.metaSpan.textContent = activeLogGroup.metaText;
     }
+
+    if (!fromBroadcast) {
+        broadcastLogEvent({
+            action: 'update_status',
+            data: { newStatus, extraMeta }
+        });
+    }
 }
 
 /**
  * Utility to log messages into our structured console log view
  */
-function log(message, type = 'system', explicitData = null) {
+function log(message, type = 'system', explicitData = null, fromBroadcast = false) {
     const timestamp = new Date().toLocaleTimeString();
 
     if (!activeLogGroup) {
@@ -441,7 +498,7 @@ function log(message, type = 'system', explicitData = null) {
     // Auto-update attempt status on error or final callback
     if (!activeLogGroup.isSystemGroup) {
         if (type === 'error') {
-            updateActiveAttemptStatus('error');
+            updateActiveAttemptStatus('error', '', fromBroadcast);
         } else if (type === 'success' && (
             category.toUpperCase().includes('CALLBACK') ||
             cleanText.includes('registered successfully') ||
@@ -449,7 +506,7 @@ function log(message, type = 'system', explicitData = null) {
             cleanText.includes('Final Link') ||
             category.toUpperCase().includes('RESPONSE')
         )) {
-            updateActiveAttemptStatus('success');
+            updateActiveAttemptStatus('success', '', fromBroadcast);
         }
     }
 
@@ -462,14 +519,43 @@ function log(message, type = 'system', explicitData = null) {
     };
     activeLogGroup.entries.push(entryRecord);
 
+    if (!fromBroadcast) {
+        broadcastLogEvent({
+            action: 'log_entry',
+            data: { message, type, explicitData }
+        });
+    }
+
+    const hasPayload = payload !== null && payload !== undefined;
+
     const entry = document.createElement('div');
-    entry.className = `log-entry ${type}`;
+    entry.className = `log-entry ${type}${hasPayload ? ' has-payload' : ''}`;
 
     const topRow = document.createElement('div');
-    topRow.className = 'log-entry-top';
+    topRow.className = `log-entry-top${hasPayload ? ' has-payload' : ''}`;
 
     const mainCol = document.createElement('div');
     mainCol.className = 'log-entry-main';
+
+    // Line-by-line Collapse / Expand button
+    const collapseLineBtn = document.createElement('button');
+    collapseLineBtn.type = 'button';
+    collapseLineBtn.className = 'log-entry-collapse-btn';
+    collapseLineBtn.textContent = '▼';
+    collapseLineBtn.title = hasPayload
+        ? 'Collapse / Expand this log line and its payload'
+        : 'Collapse / Expand this log line';
+
+    const toggleEntryCollapsed = (e) => {
+        if (e) e.stopPropagation();
+        const isCollapsed = entry.classList.toggle('entry-collapsed');
+        const foldLineBtn = entry.querySelector('.log-fold-line-btn');
+        if (foldLineBtn) {
+            foldLineBtn.textContent = isCollapsed ? '➕ Unfold Line' : '➖ Fold Line';
+        }
+    };
+
+    collapseLineBtn.addEventListener('click', toggleEntryCollapsed);
 
     const timeSpan = document.createElement('span');
     timeSpan.className = 'log-timestamp';
@@ -487,24 +573,42 @@ function log(message, type = 'system', explicitData = null) {
         msgSpan.title = cleanText;
     }
 
+    mainCol.appendChild(collapseLineBtn);
     mainCol.appendChild(timeSpan);
     mainCol.appendChild(catSpan);
     mainCol.appendChild(msgSpan);
+
+    if (hasPayload) {
+        const collapsedPill = document.createElement('span');
+        collapsedPill.className = 'log-collapsed-payload-pill';
+        const keyCount = (typeof payload === 'object' && payload !== null) ? Object.keys(payload).length : 0;
+        collapsedPill.textContent = keyCount > 0 ? `{… ${keyCount} keys — click to expand}` : '{… payload hidden — click to expand}';
+        collapsedPill.title = 'Click to expand JSON payload';
+        collapsedPill.addEventListener('click', toggleEntryCollapsed);
+        mainCol.appendChild(collapsedPill);
+
+        topRow.addEventListener('click', (e) => {
+            if (e.target.closest('button')) return;
+            toggleEntryCollapsed();
+        });
+    }
+
     topRow.appendChild(mainCol);
 
     // Individual copy button if entry is a callback, error, response, or has payload
-    const isImportantEntry = payload !== null && payload !== undefined ||
+    const isImportantEntry = hasPayload ||
         type === 'callback' ||
         type === 'error' ||
         category.toUpperCase().includes('CALLBACK') ||
         category.toUpperCase().includes('RESPONSE');
 
-    if (isImportantEntry && payload === null) {
+    if (isImportantEntry && !hasPayload) {
         const copyEntryBtn = document.createElement('button');
         copyEntryBtn.type = 'button';
         copyEntryBtn.className = 'btn-copy-entry';
         copyEntryBtn.textContent = '📋 Copy';
-        copyEntryBtn.addEventListener('click', () => {
+        copyEntryBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
             const rawText = `[${timestamp}] [${category}] ${cleanText}`;
             copyTextWithFeedback(rawText, copyEntryBtn, '📋 Copy');
         });
@@ -514,7 +618,7 @@ function log(message, type = 'system', explicitData = null) {
     entry.appendChild(topRow);
 
     // Render pretty JSON / structured payload block if present
-    if (payload !== null && payload !== undefined) {
+    if (hasPayload) {
         const payloadWrapper = document.createElement('div');
         payloadWrapper.className = 'log-payload-wrapper';
 
@@ -552,6 +656,14 @@ function log(message, type = 'system', explicitData = null) {
         };
 
         renderPreContent(compactedFormattedString);
+
+        const foldPayloadBtn = document.createElement('button');
+        foldPayloadBtn.type = 'button';
+        foldPayloadBtn.className = 'btn-copy-entry log-fold-line-btn';
+        foldPayloadBtn.textContent = '➖ Fold Line';
+        foldPayloadBtn.title = 'Collapse this log entry & payload into a single line';
+        foldPayloadBtn.addEventListener('click', toggleEntryCollapsed);
+        toolbarActions.appendChild(foldPayloadBtn);
 
         if (compactedPayloadRes.compacted) {
             let isExpanded = false;
@@ -1958,7 +2070,32 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
-    // Logs Toolbar Actions: Clear, Copy All, Expand Height, Fullscreen Modal
+    // Logs Toolbar Actions: Clear, Copy All, Fold Payloads, New Tab, Expand Height, Fullscreen Modal
+    const foldAllPayloadsBtn = document.getElementById('btn-fold-all-payloads');
+    const openLogsNewTabBtn = document.getElementById('btn-open-logs-new-tab');
+    let allPayloadsFolded = false;
+
+    if (foldAllPayloadsBtn) {
+        foldAllPayloadsBtn.addEventListener('click', () => {
+            allPayloadsFolded = !allPayloadsFolded;
+            const payloadEntries = logsContainer ? logsContainer.querySelectorAll('.log-entry.has-payload') : [];
+            payloadEntries.forEach(entry => {
+                entry.classList.toggle('entry-collapsed', allPayloadsFolded);
+                const foldLineBtn = entry.querySelector('.log-fold-line-btn');
+                if (foldLineBtn) foldLineBtn.textContent = allPayloadsFolded ? '➕ Unfold Line' : '➖ Fold Line';
+            });
+            foldAllPayloadsBtn.classList.toggle('active', allPayloadsFolded);
+            foldAllPayloadsBtn.textContent = allPayloadsFolded ? '🔼 Unfold Payloads' : '🔽 Fold Payloads';
+        });
+    }
+
+    if (openLogsNewTabBtn) {
+        openLogsNewTabBtn.addEventListener('click', () => {
+            saveLogsSnapshotForNewTab();
+            window.open('/?view=logs', '_blank');
+        });
+    }
+
     if (clearLogsBtn) {
         clearLogsBtn.addEventListener('click', () => {
             if (logsContainer) logsContainer.innerHTML = '';
@@ -1966,6 +2103,7 @@ document.addEventListener('DOMContentLoaded', () => {
             activeLogGroup = null;
             logAttemptCounter = 0;
             updateLogsCountBadge();
+            broadcastLogEvent({ action: 'clear_logs' });
             log('[System] Logs cleared.', 'system');
         });
     }
@@ -2019,6 +2157,78 @@ document.addEventListener('DOMContentLoaded', () => {
             toggleFullscreenLogs(false);
         }
     });
-    
-    log('[System] Demo playground ready. Configure theme or input a token to start.', 'system');
+
+    // URL Query Parameters Support (?tab=callback or ?view=logs)
+    const urlParams = new URLSearchParams(window.location.search);
+    const requestedTab = urlParams.get('tab');
+    const requestedView = urlParams.get('view');
+
+    if (requestedTab === 'callback') {
+        switchSandboxTab('callback');
+    }
+
+    if (requestedView === 'logs') {
+        document.body.classList.add('standalone-logs-view');
+        document.title = 'PSP Sandbox — Live Logs & Events';
+        try {
+            const rawSnap = localStorage.getItem(LOGS_SNAPSHOT_STORAGE_KEY);
+            if (rawSnap) {
+                const parsedSnap = JSON.parse(rawSnap);
+                const snapGroups = Array.isArray(parsedSnap)
+                    ? parsedSnap
+                    : (Array.isArray(parsedSnap?.groups) ? parsedSnap.groups : []);
+                if (snapGroups.length > 0) {
+                    if (logsContainer) logsContainer.innerHTML = '';
+                    allLogGroups.length = 0;
+                    activeLogGroup = null;
+                    logAttemptCounter = 0;
+                    snapGroups.forEach(g => {
+                        createLogGroup({
+                            isSystemGroup: Boolean(g.isSystemGroup),
+                            pspId: g.pspId || 'system',
+                            pspName: g.pspName || 'PSP',
+                            method: g.method || 'sdk',
+                            amountDisplay: g.amountDisplay || '',
+                            customerRef: g.customerRef || ''
+                        });
+                        if (g.status && g.status !== 'pending' && !g.isSystemGroup) {
+                            updateActiveAttemptStatus(g.status, '', true);
+                        }
+                        if (Array.isArray(g.entries)) {
+                            g.entries.forEach(entry => {
+                                const msgText = entry.message || (entry.category ? `[${entry.category}] ${entry.cleanText || ''}` : (entry.cleanText || ''));
+                                log(msgText, entry.type || 'info', entry.payload, true);
+                            });
+                        }
+                    });
+                }
+            }
+        } catch (e) {
+            // Ignore snapshot parse error
+        }
+
+        if (logsBroadcastChannel) {
+            logsBroadcastChannel.onmessage = (event) => {
+                const msg = event.data;
+                const action = msg && (msg.action || msg.eventType);
+                if (!action) return;
+                if (action === 'start_attempt' && msg.data) {
+                    startPaymentAttemptLog(msg.data, true);
+                } else if (action === 'update_status' && msg.data) {
+                    updateActiveAttemptStatus(msg.data.newStatus || msg.data.status, msg.data.extraMeta || msg.data.label || '', true);
+                } else if (action === 'log_entry' && msg.data) {
+                    log(msg.data.message, msg.data.type, msg.data.explicitData !== undefined ? msg.data.explicitData : msg.data.payload, true);
+                } else if (action === 'clear_logs' || action === 'clear') {
+                    if (logsContainer) logsContainer.innerHTML = '';
+                    allLogGroups.length = 0;
+                    activeLogGroup = null;
+                    logAttemptCounter = 0;
+                    updateLogsCountBadge();
+                }
+            };
+        }
+        log('[System] Standalone Live Logs tab connected. Listening for real-time events from main sandbox tab...', 'system');
+    } else {
+        log('[System] Demo playground ready. Configure theme or input a token to start.', 'system');
+    }
 });

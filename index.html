@@ -55,7 +55,7 @@
                 <!-- Automatic Token Fields -->
                 <div id="auto-token-fields">
                     <div class="form-group">
-                        <label for="customerRef">Customer Reference</label>
+                        <label for="customerRef">Customer Reference (PassengerAccountUuid)</label>
                         <input type="text" id="customerRef" value="1" placeholder="e.g. 1">
                     </div>
 
@@ -294,9 +294,11 @@
                         <span class="logs-count-badge" id="logs-count-badge">0 attempts</span>
                     </div>
                     <div class="logs-actions">
+                        <button type="button" id="btn-fold-all-payloads" class="btn-log-action" title="Collapse or expand all log payloads line by line">🔽 Fold Payloads</button>
                         <button type="button" id="btn-copy-all-logs" class="btn-log-action" title="Copy all logs to clipboard">📋 Copy All</button>
                         <button type="button" id="btn-expand-logs" class="btn-log-action" title="Expand / Increase height">↕️ Taller</button>
                         <button type="button" id="btn-fullscreen-logs" class="btn-log-action" title="Toggle fullscreen modal view">⛶ Maximize</button>
+                        <button type="button" id="btn-open-logs-new-tab" class="btn-log-action" title="Open logs view in a new browser tab">↗️ New Tab</button>
                         <button type="button" id="btn-clear-logs" class="btn-log-action btn-log-danger" title="Clear all logs">🗑️ Clear</button>
                     </div>
                 </div>

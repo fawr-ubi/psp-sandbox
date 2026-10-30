@@ -1085,4 +1085,109 @@ input[type="color"]::-webkit-color-swatch {
     background-color: var(--primary-dark);
 }
 
+/* =========================================================================
+   Line-by-Line Collapsible Log Entries & Standalone Logs View
+   ========================================================================= */
+.log-entry-collapse-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #94a3b8;
+    font-size: 0.58rem;
+    width: 17px;
+    height: 17px;
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+    transition: transform 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+    line-height: 1;
+}
+
+.log-entry-collapse-btn:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+}
+
+.log-entry.entry-collapsed .log-entry-collapse-btn {
+    transform: rotate(-90deg);
+    background: rgba(59, 130, 246, 0.22);
+    border-color: rgba(96, 165, 250, 0.4);
+    color: #93c5fd;
+}
+
+.log-entry-top.has-payload {
+    cursor: pointer;
+}
+
+.log-collapsed-payload-pill {
+    display: none;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background-color: rgba(59, 130, 246, 0.18);
+    border: 1px solid rgba(96, 165, 250, 0.35);
+    color: #93c5fd;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.log-collapsed-payload-pill:hover {
+    background-color: rgba(59, 130, 246, 0.32);
+    color: #ffffff;
+}
+
+.log-entry.entry-collapsed .log-payload-wrapper {
+    display: none !important;
+}
+
+.log-entry.entry-collapsed .log-collapsed-payload-pill {
+    display: inline-flex;
+}
+
+.log-entry.entry-collapsed .log-message-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 440px;
+    display: inline-block;
+    vertical-align: bottom;
+    opacity: 0.85;
+}
+
+/* Standalone Full-Page Logs View (?view=logs) */
+body.standalone-logs-view .sandbox-tabs-bar {
+    display: none;
+}
+
+body.standalone-logs-view #tab-view-checkout {
+    display: block !important;
+    max-width: 1400px;
+}
+
+body.standalone-logs-view .config-panel,
+body.standalone-logs-view .preview-card {
+    display: none !important;
+}
+
+body.standalone-logs-view .logs-card {
+    min-height: calc(100vh - 140px);
+    display: flex;
+    flex-direction: column;
+}
+
+body.standalone-logs-view .logs-container {
+    height: calc(100vh - 210px) !important;
+    max-height: none !important;
+    flex: 1;
+}
+
+
+
+
 
